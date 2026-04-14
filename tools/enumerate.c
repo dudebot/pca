@@ -28,6 +28,64 @@
 #define MAX_SOLUTIONS   100
 #define MAX_CANDIDATES  32768
 
+/* --- observational equivalence pruning (OEP) ---
+ *
+ * After executing the partial program on the first test input,
+ * hash the register file + flags. If the same state was reached
+ * by a different instruction sequence at the same depth, the
+ * remaining instructions will produce the same output — prune.
+ *
+ * Uses a simple open-addressing hash table per depth level.
+ */
+#define OEP_TABLE_BITS 20
+#define OEP_TABLE_SIZE (1 << OEP_TABLE_BITS)
+#define OEP_TABLE_MASK (OEP_TABLE_SIZE - 1)
+
+typedef struct {
+    uint32_t *tables[16];  /* one hash table per kernel depth, lazily allocated */
+    uint64_t  pruned;
+    int       enabled;
+} oep_state_t;
+
+/* Returns 1 if this state was already seen (should prune), 0 if new. */
+static int oep_check_and_insert(oep_state_t *oep, int depth, uint32_t hash)
+{
+    if (!oep->enabled) return 0;
+    if (!oep->tables[depth]) {
+        oep->tables[depth] = calloc(OEP_TABLE_SIZE, sizeof(uint32_t));
+        if (!oep->tables[depth]) return 0;
+    }
+
+    /* sentinel: 0 means empty, so we avoid hash==0 */
+    uint32_t key = hash | 1;
+    uint32_t idx = hash & OEP_TABLE_MASK;
+
+    for (int probe = 0; probe < 32; probe++) {
+        uint32_t slot = oep->tables[depth][(idx + probe) & OEP_TABLE_MASK];
+        if (slot == 0) {
+            oep->tables[depth][(idx + probe) & OEP_TABLE_MASK] = key;
+            return 0;  /* new state */
+        }
+        if (slot == key) {
+            oep->pruned++;
+            return 1;  /* seen before */
+        }
+    }
+    return 0;  /* table full at this slot, don't prune (conservative) */
+}
+
+static void oep_clear_depth(oep_state_t *oep, int depth)
+{
+    if (oep->tables[depth])
+        memset(oep->tables[depth], 0, OEP_TABLE_SIZE * sizeof(uint32_t));
+}
+
+static void oep_free(oep_state_t *oep)
+{
+    for (int i = 0; i < 16; i++)
+        free(oep->tables[i]);
+}
+
 /* immediates to try with LDI */
 static const uint8_t ldi_vals[] = {0, 1, 2, 3, 4, 5, 8, 16, 32, 64, 128, 255};
 #define N_LDI ((int)(sizeof(ldi_vals)/sizeof(ldi_vals[0])))
@@ -50,6 +108,8 @@ typedef struct {
     uint64_t tried;
     int      use_branches;
     int      verbose;
+
+    oep_state_t oep;
 } solver_t;
 
 /* --- candidate generation --- */
@@ -191,6 +251,36 @@ static void enumerate_kernel(solver_t *s, int pos, int kernel_depth,
             new_live |= (1 << rd);
         }
 
+        /* observational equivalence pruning:
+         * run partial program on ALL test inputs, hash combined register state.
+         * two prefixes that produce identical states on every input are
+         * truly equivalent — any suffix that works for one works for the other. */
+        if (s->oep.enabled && op != OP_BR) {
+            int partial_len = prog_pos + 1;
+            s->program[partial_len] = ENCODE_R(OP_HLT, 0, 0, 0);
+
+            uint32_t h = 2166136261u;
+            for (int t = 0; t < s->task.num_tests; t++) {
+                pca_vm_t vm;
+                pca_init(&vm);
+                pca_load(&vm, s->program, partial_len + 1);
+                for (int p = 0; p < s->task.num_inputs; p++)
+                    vm.ports[s->task.input_ports[p]] = s->task.tests[t].in[p];
+                pca_run(&vm, 100);
+
+                /* fold this test's register state into hash */
+                for (int r = 0; r < PCA_NUM_REGS; r++) {
+                    h ^= vm.r[r] & 0xFF;  h *= 16777619u;
+                    h ^= vm.r[r] >> 8;    h *= 16777619u;
+                }
+                h ^= vm.flags; h *= 16777619u;
+            }
+
+            if (oep_check_and_insert(&s->oep, pos, h)) {
+                continue;
+            }
+        }
+
         enumerate_kernel(s, pos + 1, kernel_depth, new_live);
     }
 }
@@ -229,13 +319,14 @@ static void print_solution(solver_t *s, int idx)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "Usage: enumerate <task.json> [-d max_depth] [--no-branch] [-v]\n");
+        fprintf(stderr, "Usage: enumerate <task.json> [-d max_depth] [--no-branch] [--no-oep] [-v]\n");
         return 1;
     }
 
     solver_t solver;
     memset(&solver, 0, sizeof(solver));
     solver.use_branches = 1;
+    solver.oep.enabled = 1;
     int max_depth = 4;
 
     /* parse args */
@@ -245,6 +336,8 @@ int main(int argc, char **argv)
             max_depth = atoi(argv[++i]);
         else if (strcmp(argv[i], "--no-branch") == 0)
             solver.use_branches = 0;
+        else if (strcmp(argv[i], "--no-oep") == 0)
+            solver.oep.enabled = 0;
         else if (strcmp(argv[i], "-v") == 0)
             solver.verbose = 1;
     }
@@ -263,8 +356,9 @@ int main(int argc, char **argv)
         initial_live |= (1 << reg);
     }
 
-    printf("Enumerating programs (max kernel depth %d, branches %s)...\n\n",
-           max_depth, solver.use_branches ? "on" : "off");
+    printf("Enumerating programs (max kernel depth %d, branches %s, OEP %s)...\n\n",
+           max_depth, solver.use_branches ? "on" : "off",
+           solver.oep.enabled ? "on" : "off");
 
     /* iterative deepening */
     struct timespec t0, t1;
@@ -277,6 +371,10 @@ int main(int argc, char **argv)
         uint64_t tried_before = solver.tried;
         int sols_before = solver.num_solutions;
 
+        /* clear OEP tables for this depth level */
+        for (int d = 0; d < 16; d++)
+            oep_clear_depth(&solver.oep, d);
+
         enumerate_kernel(&solver, 0, depth, initial_live);
 
         clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -287,6 +385,8 @@ int main(int argc, char **argv)
         printf("  candidates: %llu  (%.1f M/sec)\n",
                (unsigned long long)tried_this,
                tried_this / elapsed / 1e6);
+        if (solver.oep.enabled)
+            printf("  OEP pruned: %llu\n", (unsigned long long)solver.oep.pruned);
         printf("  solutions found: %d (total: %d)\n", sols_this, solver.num_solutions);
         printf("  elapsed: %.2f sec\n\n", elapsed);
 
@@ -309,8 +409,12 @@ int main(int argc, char **argv)
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double total = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
-    printf("\nTotal: %llu candidates in %.2f sec\n",
+    printf("\nTotal: %llu candidates in %.2f sec",
            (unsigned long long)solver.tried, total);
+    if (solver.oep.enabled)
+        printf(" (OEP pruned: %llu)", (unsigned long long)solver.oep.pruned);
+    printf("\n");
 
+    oep_free(&solver.oep);
     return solver.num_solutions > 0 ? 0 : 1;
 }
