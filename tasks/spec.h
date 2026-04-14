@@ -10,6 +10,10 @@
 
 #include "../src/pca.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MAX_TESTS    32
 #define MAX_IO_PORTS 8
 
@@ -39,5 +43,9 @@ int task_evaluate(const task_spec_t *spec, const uint16_t *prog, int prog_len);
 
 /* Print a task summary. */
 void task_print(const task_spec_t *spec);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SPEC_H */

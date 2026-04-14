@@ -17,6 +17,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Architecture constants */
 #define PCA_NUM_REGS    8
 #define PCA_MEM_SIZE    256
@@ -133,5 +137,9 @@ int pca_assemble(const char *src, uint16_t *prog, size_t max_insns,
 void pca_disasm(uint16_t insn, char *buf, size_t len);
 /* Disassemble an entire program */
 void pca_disasm_prog(const uint16_t *prog, int count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PCA_H */
