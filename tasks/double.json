@@ -1,0 +1,17 @@
+{
+    "name": "double",
+    "description": "Multiply input by 2 (mod 65536)",
+    "max_cycles": 100,
+    "input_ports": [0],
+    "output_ports": [0],
+    "tests": [
+        {"in": [5],     "out": [10]},
+        {"in": [0],     "out": [0]},
+        {"in": [1],     "out": [2]},
+        {"in": [100],   "out": [200]},
+        {"in": [32767], "out": [65534]},
+        {"in": [32768], "out": [0]},
+        {"in": [255],   "out": [510]},
+        {"in": [10000], "out": [20000]}
+    ]
+}

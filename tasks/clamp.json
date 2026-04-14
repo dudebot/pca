@@ -1,0 +1,17 @@
+{
+    "name": "clamp",
+    "description": "Clamp signed input to [0, 255]: negative->0, >255->255",
+    "max_cycles": 100,
+    "input_ports": [0],
+    "output_ports": [0],
+    "tests": [
+        {"in": [5],     "out": [5]},
+        {"in": [0],     "out": [0]},
+        {"in": [255],   "out": [255]},
+        {"in": [256],   "out": [255]},
+        {"in": [1000],  "out": [255]},
+        {"in": [65535], "out": [0]},
+        {"in": [65531], "out": [0]},
+        {"in": [100],   "out": [100]}
+    ]
+}

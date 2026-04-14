@@ -1,0 +1,17 @@
+{
+    "name": "saturating_add",
+    "description": "Unsigned saturating add: min(a + b, 65535)",
+    "max_cycles": 100,
+    "input_ports": [0, 1],
+    "output_ports": [0],
+    "tests": [
+        {"in": [3, 5],         "out": [8]},
+        {"in": [0, 0],         "out": [0]},
+        {"in": [65535, 1],     "out": [65535]},
+        {"in": [65535, 65535], "out": [65535]},
+        {"in": [32768, 32768], "out": [65535]},
+        {"in": [100, 200],     "out": [300]},
+        {"in": [65000, 1000],  "out": [65535]},
+        {"in": [1, 1],         "out": [2]}
+    ]
+}

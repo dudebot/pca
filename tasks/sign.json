@@ -1,0 +1,17 @@
+{
+    "name": "sign",
+    "description": "Sign function: -1 if negative, 0 if zero, 1 if positive (signed)",
+    "max_cycles": 100,
+    "input_ports": [0],
+    "output_ports": [0],
+    "tests": [
+        {"in": [5],     "out": [1]},
+        {"in": [0],     "out": [0]},
+        {"in": [65535], "out": [65535]},
+        {"in": [65531], "out": [65535]},
+        {"in": [32767], "out": [1]},
+        {"in": [32769], "out": [65535]},
+        {"in": [1],     "out": [1]},
+        {"in": [100],   "out": [1]}
+    ]
+}

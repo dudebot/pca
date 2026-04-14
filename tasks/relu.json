@@ -1,0 +1,17 @@
+{
+    "name": "relu",
+    "description": "Rectified linear unit: output = max(0, input) signed",
+    "max_cycles": 100,
+    "input_ports": [0],
+    "output_ports": [0],
+    "tests": [
+        {"in": [5],     "out": [5]},
+        {"in": [0],     "out": [0]},
+        {"in": [65535], "out": [0]},
+        {"in": [65531], "out": [0]},
+        {"in": [32767], "out": [32767]},
+        {"in": [32769], "out": [0]},
+        {"in": [100],   "out": [100]},
+        {"in": [1],     "out": [1]}
+    ]
+}

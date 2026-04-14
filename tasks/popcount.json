@@ -1,0 +1,19 @@
+{
+    "name": "popcount",
+    "description": "Count the number of set bits (1s) in the input",
+    "max_cycles": 5000,
+    "input_ports": [0],
+    "output_ports": [0],
+    "tests": [
+        {"in": [0],     "out": [0]},
+        {"in": [1],     "out": [1]},
+        {"in": [3],     "out": [2]},
+        {"in": [7],     "out": [3]},
+        {"in": [15],    "out": [4]},
+        {"in": [255],   "out": [8]},
+        {"in": [65535], "out": [16]},
+        {"in": [32768], "out": [1]},
+        {"in": [43690], "out": [8]},
+        {"in": [4096],  "out": [1]}
+    ]
+}
