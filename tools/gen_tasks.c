@@ -19,7 +19,11 @@
 
 /* --- configuration --- */
 
-#define MAX_KERNEL_LEN   6
+#define MAX_KERNEL_LEN   10
+
+/* Globals set from CLI --min-len / --max-len */
+static int g_min_len = 2;
+static int g_max_len = 6;
 #define MAX_PROBES_UNARY 192   /* 128 random + 64 edge cases */
 #define MAX_PROBES_BIN   320   /* 256 random + 64 paired edge cases */
 #define MAX_PROBES       MAX_PROBES_BIN
@@ -317,16 +321,8 @@ static int generate_one_task(rng_t *rng, gen_program_t *prog, probe_bank_t *pb)
     /* Sample num_inputs */
     prog->num_inputs = rng_f64(rng) < 0.4 ? 1 : 2;
 
-    /* Sample kernel length 2..6 biased toward 3..5 */
-    static const int len_weights[] = {1, 3, 4, 3, 1};  /* for lengths 2,3,4,5,6 */
-    int total_w = 12;
-    int r = rng_int(rng, 0, total_w - 1);
-    int cum = 0;
-    prog->kernel_len = 2;
-    for (int i = 0; i < 5; i++) {
-        cum += len_weights[i];
-        if (r < cum) { prog->kernel_len = i + 2; break; }
-    }
+    /* Sample kernel length (configurable via g_min_len/g_max_len) */
+    prog->kernel_len = g_min_len + rng_int(rng, 0, g_max_len - g_min_len);
 
     /* Probe bank register state — separate from search_state_t (which is
      * limited to MAX_TESTS=32). We need up to MAX_PROBES (320) entries. */
@@ -471,7 +467,7 @@ static void emit_task_json(const char *dir, int task_num,
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "Usage: gen_tasks <output_dir> [-n count] [-s seed] [--verify]\n");
+        fprintf(stderr, "Usage: gen_tasks <output_dir> [-n count] [-s seed] [--verify] [--min-len N] [--max-len N]\n");
         return 1;
     }
 
@@ -479,6 +475,8 @@ int main(int argc, char **argv)
     int target_count = 1000;
     uint64_t seed = 42;
     int verify = 0;
+    int cli_min_len = 0;  /* 0 = use default weighted sampling */
+    int cli_max_len = 0;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
@@ -487,13 +485,22 @@ int main(int argc, char **argv)
             seed = (uint64_t)atoll(argv[++i]);
         else if (strcmp(argv[i], "--verify") == 0)
             verify = 1;
+        else if (strcmp(argv[i], "--min-len") == 0 && i + 1 < argc)
+            cli_min_len = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--max-len") == 0 && i + 1 < argc)
+            cli_max_len = atoi(argv[++i]);
     }
+
+    if (cli_min_len > 0) g_min_len = cli_min_len;
+    if (cli_max_len > 0) g_max_len = cli_max_len;
+    if (g_max_len > MAX_KERNEL_LEN) g_max_len = MAX_KERNEL_LEN;
+    if (g_min_len > g_max_len) g_min_len = g_max_len;
 
     rng_t rng;
     rng_seed(&rng, seed);
 
-    printf("Generating %d synthetic tasks (seed=%llu)...\n",
-           target_count, (unsigned long long)seed);
+    printf("Generating %d synthetic tasks (seed=%llu, len=%d..%d)...\n",
+           target_count, (unsigned long long)seed, g_min_len, g_max_len);
 
     int generated = 0;
     int attempted = 0;

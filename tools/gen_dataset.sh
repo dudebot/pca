@@ -9,13 +9,14 @@ TASKS_DIR="${1:?Usage: gen_dataset.sh <tasks_dir> <output_dir> [max_depth] [neg_
 OUTPUT_DIR="${2:?Usage: gen_dataset.sh <tasks_dir> <output_dir> [max_depth] [neg_stride]}"
 MAX_DEPTH="${3:-6}"
 NEG_STRIDE="${4:-4}"
+TIMEOUT="${5:-30}"
 
 mkdir -p "$OUTPUT_DIR"
 
 TASKS=($(ls "$TASKS_DIR"/*.json 2>/dev/null))
 TOTAL=${#TASKS[@]}
 
-echo "Processing $TOTAL tasks (max_depth=$MAX_DEPTH, neg_stride=$NEG_STRIDE)..."
+echo "Processing $TOTAL tasks (max_depth=$MAX_DEPTH, neg_stride=$NEG_STRIDE, timeout=${TIMEOUT}s)..."
 
 SOLVED=0
 FAILED=0
@@ -25,7 +26,7 @@ for task in "${TASKS[@]}"; do
     NAME=$(basename "$task" .json)
 
     # Run solver with recording, timeout at 30 seconds per task
-    if timeout 30 ./enumerate "$task" -d "$MAX_DEPTH" --record "$OUTPUT_DIR" \
+    if timeout "$TIMEOUT" ./enumerate "$task" -d "$MAX_DEPTH" --record "$OUTPUT_DIR" \
         --task-id "$TASK_ID" --neg-stride "$NEG_STRIDE" > /dev/null 2>&1; then
         SOLVED=$((SOLVED + 1))
     else
