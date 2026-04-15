@@ -2,4 +2,21 @@
 *.o
 pca
 enumerate
+gen_tasks
+gpu_enumerate
+gpu_enumerate_oep
+gpu_hybrid
+gpu_hybrid_native
 libpca.so
+test_search_state*
+
+# Training data (regenerable via gen_tasks + gen_dataset.sh)
+data/train/
+data/val/
+data/*.bin
+
+# Model checkpoints
+checkpoints/
+
+# TensorBoard logs
+runs/

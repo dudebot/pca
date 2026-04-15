@@ -1,0 +1,19 @@
+{
+  "split": "test",
+  "total_tasks": 143,
+  "max_budget": 64,
+  "n_random_trials": 5,
+  "checkpoint": "checkpoints/value_v1.pt",
+  "model_success": {
+    "8": 73,
+    "16": 83,
+    "32": 90,
+    "64": 107
+  },
+  "random_success": {
+    "8": 44.20000000000002,
+    "16": 53.200000000000024,
+    "32": 69.20000000000002,
+    "64": 88.99999999999993
+  }
+}

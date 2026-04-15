@@ -9,14 +9,18 @@ pca: $(PCA_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 # --- exhaustive solver ---
-ENUM_SRCS = src/vm.c src/asm.c tasks/spec.c tools/enumerate.c
+ENUM_SRCS = src/vm.c src/asm.c src/search_state.c tasks/spec.c tools/enumerate.c
 ENUM_OBJS = $(ENUM_SRCS:.c=.o)
 
 enumerate: $(ENUM_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# --- task generator ---
+gen_tasks: src/vm.c src/asm.c src/search_state.c tasks/spec.c tools/gen_tasks.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 # --- shared object for Python bindings ---
-libpca.so: src/vm.c src/asm.c tasks/spec.c
+libpca.so: src/vm.c src/asm.c src/search_state.c tasks/spec.c
 	$(CC) $(CFLAGS) -shared -fPIC -o $@ $^
 
 # --- pattern rules ---
@@ -43,7 +47,7 @@ gpu_hybrid: gpu/hybrid.cu tasks/spec.c src/vm.c src/asm.c
 	$(NVCC) $(NVFLAGS) -o $@ $^
 
 # --- targets ---
-all: pca enumerate
+all: pca enumerate gen_tasks
 
 gpu: gpu_enumerate gpu_enumerate_oep
 

@@ -2,51 +2,60 @@
 
 ## What this is
 
-AI-driven program synthesis on a custom 16-bit ISA (PCA-16). The system
-exhaustively solves tiny tasks to generate perfect training data, then
-(planned) trains a value/policy network to guide search on harder tasks.
+AI-driven program synthesis on a custom 16-bit ISA (PCA-16). Exhaustively
+solve tiny tasks to generate perfect training data, train a value network
+to guide search on harder tasks, bootstrap up to program lengths that
+brute force can't reach.
 
-Read `docs/PLAN.md` for the full research roadmap.
-Read `docs/CUDA_SPEC.md` for GPU solver design and performance targets.
+Read `docs/STATUS.md` for current progress and next steps.
+Read `docs/CUDA_SPEC.md` for GPU solver design.
+
+## Phase Map
+
+| Phase | Goal | Status |
+|-------|------|--------|
+| 1. Solver | Exhaustive CPU+GPU search, prove optimality | Done |
+| 2. Learning | Value network trained on exhaustive data, beats random search | **Active** |
+| 3. Bootstrap | Curriculum learning: depth D model helps generate depth D+1 data | Next |
+| 4. Branches | Extend to conditional execution (CMP/BR) | Future |
+| 5. Verification | CEGIS: adversarial test generation for correctness proofs | Future |
 
 ## Build
 
 ```bash
-make          # builds: pca (emulator CLI), enumerate (CPU solver)
-make test     # run emulator tests
-make synth    # run CPU solver on tier 1 tasks
+make              # builds: pca, enumerate, gen_tasks
+make libpca.so    # shared lib for Python ctypes bindings
+make test         # run emulator tests
 
-# GPU solver (requires CUDA toolkit):
-nvcc -O3 -arch=native -o gpu_enumerate gpu/evaluate.cu tasks/spec.c src/vm.c
+# GPU hybrid solver (requires CUDA 12.8+):
+make gpu_hybrid
+
+# Training:
+pip install -r requirements.txt
+python python/train.py --epochs 10 --batch-size 2048 --lr 3e-4
+
+# Evaluation:
+python python/search_eval.py --checkpoint checkpoints/value_v1.pt --split test
 ```
 
 ## Repo layout
 
 ```
-src/           PCA-16 emulator (pca.h, vm.c, asm.c, main.c)
-tasks/         Task specs: spec.h/spec.c (loader) + *.json (I/O test cases)
-tools/         CPU exhaustive solver (enumerate.c)
-gpu/           CUDA exhaustive solver (evaluate.cu) — untested, needs GPU
-programs/      Hand-written PCA-16 assembly (fib.s, echo.s, pid.s)
-docs/          PLAN.md (roadmap), CUDA_SPEC.md (GPU design)
-pid.asm        Reference 6502 PID controller (historical comparison)
+src/               PCA-16 emulator (pca.h, vm.c, asm.c, main.c)
+src/search_state.c Branchless search state abstraction for Phase 2
+tasks/             Task specs: spec.h/spec.c + *.json (I/O test cases)
+tools/             enumerate.c (CPU solver), gen_tasks.c (synthetic task gen),
+                   gen_dataset.sh (batch solve + record driver)
+gpu/               CUDA solver (evaluate.cu, wavefront.cu)
+python/            dataset.py, model.py, train.py, search_eval.py, build_manifest.py
+data/synthetic/    1000 synthetic task JSONs (in git)
+data/train/        Binary state records, 81GB (gitignored, regenerable)
+data/manifest.json Task manifest with train/val/test splits (in git)
+checkpoints/       Model checkpoints (gitignored)
+runs/              TensorBoard logs (gitignored)
+programs/          Hand-written PCA-16 assembly (fib.s, echo.s, pid.s)
+docs/              STATUS.md (progress), CUDA_SPEC.md (GPU design)
 ```
-
-## Current state
-
-CPU solver verified optimal programs for 9 tasks:
-negate(4), double(4), square(4), add(5), abs(6), relu(6), max(7),
-saturating_add(8), is_power2(8).
-CUDA solver compiles and runs. Tested on RTX 2060: ~1.4B candidates/sec.
-
-Known parity gaps between CPU and GPU solvers:
-- GPU lacks iterative deepening (fixed depth only, may find non-optimal)
-- GPU lacks liveness pruning and OEP (explores more dead-end candidates)
-- GPU lacks branch instruction generation (can't solve tasks needing conditionals)
-- GPU output is raw hex (no disassembly)
-
-Next steps: fix GPU/CPU parity, benchmark on RTX 5070, persist solutions
-to file (see issue #1), then Python bindings and value network training.
 
 ## ISA quick reference
 
@@ -64,8 +73,8 @@ JSON files in tasks/. Each defines input/output ports and test cases:
 
 ## Key design decisions
 
-- GPT Pro feedback: factor policy as P(op)×P(dst|op)×P(src|...), not flat softmax
-- GPT Pro feedback: use sublanguage restriction (task-relevant opcodes) to reduce search
-- Codex feedback: cap training horizon at 32-64 instructions, curriculum up from there
-- Codex feedback: use best-first/A* search, not vanilla MCTS; add CEGIS for verification
-- The milestone: "Can a learned value function beat random search at extending partial programs?"
+- Factor policy as P(op)×P(dst|op)×P(src|...), not flat softmax
+- Sublanguage restriction (task-relevant opcodes) to reduce branching factor
+- Cap training horizon at 32-64 instructions, curriculum up from there
+- Best-first/A* search, not vanilla MCTS; add CEGIS for verification later
+- The milestone: "Can a learned value function beat random search?" — **Yes (Success@8: 51% vs 31%)**
