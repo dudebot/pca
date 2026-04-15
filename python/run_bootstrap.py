@@ -2,15 +2,30 @@
 """
 run_bootstrap.py — Autonomous recursive self-improvement loop.
 
-Strategy:
-  1. Search unsolved tasks with current model → record solutions
-  2. If solve rate drops → retrain on combined data
-  3. If retrain doesn't help → train longer (more epochs)
-  4. If still stuck → scale up model (bigger hidden dims)
-  5. Repeat until all tasks solved or budget exhausted
+Trains a value network from scratch, then uses it to solve progressively
+harder tasks, recording solutions as new training data. The depth frontier
+advances each cycle as the model learns from its own discoveries.
+
+Loop:
+  1. Train initial model from scratch on existing exhaustive data (if no checkpoint)
+  2. Model-guided best-first search on unsolved tasks → record solutions
+  3. Analyze depth frontier — what's the deepest depth being solved?
+  4. Rebuild manifest with all data sources (exhaustive + bootstrap)
+  5. Retrain on combined data
+
+Adaptive escalation (when no new tasks solved):
+  - First: increase search budget (500 → 1000 → ... → 10000 expansions)
+  - Then: increase training epochs (10 → 20 → ... → 50)
+  - Finally: scale up model (hidden 256 → 512 → ... → 1024)
+
+Adaptive task generation (when unsolved tasks run low):
+  - Generates new synthetic tasks at the depth frontier
+  - Kernel length targets frontier_depth to frontier_depth+3
+  - Lower depths remain valuable — shallow data teaches "promising early moves"
+    that transfer upward (a depth-5 solution starts at depth 0 like everything else)
 
 Usage:
-  python run_bootstrap.py --task-dir data/synthetic_deep --max-rounds 10
+  python run_bootstrap.py --task-dir data/synthetic_deep --max-rounds 10 --initial-hidden 3072
 """
 
 import argparse
