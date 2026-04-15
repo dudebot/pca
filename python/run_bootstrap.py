@@ -22,6 +22,19 @@ import sys
 import time
 
 
+def analyze_frontier(output_dir):
+    """Analyze solved tasks by optimal depth. Returns {depth: count}."""
+    depths = {}
+    for f in glob.glob(os.path.join(output_dir, 'states_*.bin')):
+        if os.path.getsize(f) < 576:
+            continue
+        with open(f, 'rb') as fh:
+            rec = fh.read(576)
+        d = rec[22] + rec[23]  # depth + budget_left = optimal_depth
+        depths[d] = depths.get(d, 0) + 1
+    return depths
+
+
 def count_solved(output_dir):
     """Count solved tasks by checking for non-empty state files."""
     files = glob.glob(os.path.join(output_dir, 'states_*.bin'))
@@ -138,20 +151,37 @@ def main():
               f"(+{new_solved} this round, {cur_records:,} records)")
 
         if cur_solved >= total_tasks:
-            print(f"\n  All {total_tasks} tasks solved! Generating harder tasks...")
-            # Increase kernel length range and generate more
-            min_len = 4 + round_num  # progressively harder
-            max_len = min(min_len + 4, 10)
-            run_cmd([
-                os.path.join(args.base_dir, 'gen_tasks'),
-                task_dir,
-                '-n', '500',
-                '-s', str(1337 + round_num * 1000),
-                '--min-len', str(min_len),
-                '--max-len', str(max_len),
-            ], f"Generate harder tasks (kernel length {min_len}-{max_len})")
-            total_tasks = len(glob.glob(os.path.join(task_dir, '*.json')))
-            print(f"  Task pool now: {total_tasks}")
+            print(f"\n  All {total_tasks} tasks solved!")
+
+        # ── Adaptive task generation ──
+        # Analyze depth frontier: what's the deepest depth we're solving?
+        boot_depths = analyze_frontier(boot_dir)
+        if boot_depths:
+            frontier = max(boot_depths.keys())
+            frontier_rate = boot_depths[frontier]
+            print(f"\n  Depth frontier: {boot_depths}")
+            print(f"  Deepest solved: depth {frontier}")
+
+            # Generate tasks at and just beyond the frontier
+            # Kernel length ≈ optimal_depth + 1 (solver often finds shortcuts)
+            gen_min = max(frontier, 4)
+            gen_max = min(frontier + 3, 10)
+
+            # Count how many unsolved tasks we have at frontier depths
+            unsolved = total_tasks - cur_solved
+            if unsolved < 100 or cur_solved >= total_tasks:
+                n_new = 500
+                print(f"  Generating {n_new} tasks (kernel {gen_min}-{gen_max}) "
+                      f"to push past depth {frontier}")
+                run_cmd([
+                    os.path.join(args.base_dir, 'gen_tasks'),
+                    task_dir,
+                    '-n', str(n_new),
+                    '-s', str(1337 + round_num * 1000),
+                    '--min-len', str(gen_min),
+                    '--max-len', str(gen_max),
+                ], f"Generate frontier tasks (kernel {gen_min}-{gen_max})")
+                total_tasks = len(glob.glob(os.path.join(task_dir, '*.json')))
 
         # ── Decide strategy ──
         if new_solved == 0:
