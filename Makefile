@@ -39,6 +39,9 @@ gpu_enumerate: gpu/evaluate.cu tasks/spec.c src/vm.c
 gpu_enumerate_oep: gpu/evaluate_oep.cu tasks/spec.c src/vm.c
 	$(NVCC) $(NVFLAGS) -o $@ $^
 
+gpu_hybrid: gpu/hybrid.cu tasks/spec.c src/vm.c src/asm.c
+	$(NVCC) $(NVFLAGS) -o $@ $^
+
 # --- targets ---
 all: pca enumerate
 
