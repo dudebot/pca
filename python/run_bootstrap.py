@@ -82,12 +82,35 @@ def main():
     epochs = args.initial_epochs
     hidden_dim = args.initial_hidden
     trunk_dim = hidden_dim // 2
-    checkpoint = os.path.join(args.base_dir, 'checkpoints', 'value_v1.pt')
+    checkpoint = os.path.join(args.base_dir, 'checkpoints', 'value_v2.pt')
     boot_dir = os.path.join(args.base_dir, 'data', 'train_boot')
     prev_solved = 0
 
     print(f"Bootstrap loop: {total_tasks} tasks, max {args.max_rounds} rounds")
     print(f"Starting: budget={budget}, epochs={epochs}, hidden={hidden_dim}")
+
+    # ── Round 0: Train initial model from scratch ──
+    if not os.path.exists(checkpoint):
+        run_cmd([
+            sys.executable, 'python/build_manifest.py',
+        ], "Round 0: Build manifest")
+
+        run_cmd([
+            sys.executable, 'python/train.py',
+            '--epochs', str(epochs),
+            '--batch-size', '2048',
+            '--lr', '3e-4',
+            '--pos-weight', '50',
+            '--workers', '4',
+            '--hidden-dim', str(hidden_dim),
+            '--trunk-dim', str(trunk_dim),
+            '--save', os.path.relpath(checkpoint, args.base_dir),
+            '--run-name', f'round0_h{hidden_dim}_e{epochs}',
+        ], f"Round 0: Train initial {hidden_dim}-dim model from scratch")
+
+        if not os.path.exists(checkpoint):
+            print("ERROR: Initial training failed. Exiting.")
+            return
 
     for round_num in range(1, args.max_rounds + 1):
         print(f"\n{'#'*70}")
@@ -115,8 +138,20 @@ def main():
               f"(+{new_solved} this round, {cur_records:,} records)")
 
         if cur_solved >= total_tasks:
-            print("\n  ALL TASKS SOLVED!")
-            break
+            print(f"\n  All {total_tasks} tasks solved! Generating harder tasks...")
+            # Increase kernel length range and generate more
+            min_len = 4 + round_num  # progressively harder
+            max_len = min(min_len + 4, 10)
+            run_cmd([
+                os.path.join(args.base_dir, 'gen_tasks'),
+                task_dir,
+                '-n', '500',
+                '-s', str(1337 + round_num * 1000),
+                '--min-len', str(min_len),
+                '--max-len', str(max_len),
+            ], f"Generate harder tasks (kernel length {min_len}-{max_len})")
+            total_tasks = len(glob.glob(os.path.join(task_dir, '*.json')))
+            print(f"  Task pool now: {total_tasks}")
 
         # ── Decide strategy ──
         if new_solved == 0:
