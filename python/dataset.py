@@ -88,17 +88,15 @@ class PCADataset(Dataset):
         if max_files:
             split_tasks = split_tasks[:max_files]
 
-        train_dir = os.path.join(base_dir, 'data', 'train')
-
         # First pass: count total records
         task_files = []
         total = 0
         for t in split_tasks:
             task_id = t['task_id']
             n_records = t['n_records']
-            if n_records == 0:
+            if n_records == 0 or t.get('states_path') is None:
                 continue
-            states_path = os.path.join(train_dir, f'states_{task_id:06d}.bin')
+            states_path = os.path.join(base_dir, t['states_path'])
             if not os.path.exists(states_path):
                 continue
             task_files.append((states_path, n_records, task_id, t['path']))

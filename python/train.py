@@ -149,6 +149,10 @@ def main():
     parser.add_argument('--num-tests', type=int, default=10)
     parser.add_argument('--pos-weight', type=float, default=None,
                         help='BCE pos_weight for class imbalance (auto if not set)')
+    parser.add_argument('--hidden-dim', type=int, default=256,
+                        help='Per-test encoder hidden dim')
+    parser.add_argument('--trunk-dim', type=int, default=128,
+                        help='Trunk hidden dim')
     parser.add_argument('--save', default='checkpoints/value_v1.pt')
     parser.add_argument('--max-files', type=int, default=None,
                         help='Limit number of task files per split (for debugging)')
@@ -201,7 +205,9 @@ def main():
 
     # Model
     model = ValueNetwork(max_depth=args.max_depth,
-                         num_tests=args.num_tests).to(device)
+                         num_tests=args.num_tests,
+                         hidden_dim=args.hidden_dim,
+                         trunk_dim=args.trunk_dim).to(device)
     params = sum(p.numel() for p in model.parameters())
     print(f"Model: {params:,} parameters")
 

@@ -1,140 +1,154 @@
 #!/usr/bin/env python3
 """
-build_manifest.py — Create data/manifest.json from synthetic tasks + training data.
+build_manifest.py — Create data/manifest.json from all task/data sources.
 
-Freezes task_id → task_path → optimal_depth → num_inputs → train/val/test split.
-Extracts optimal_depth from binary state records.
-Stratifies split by (num_inputs, optimal_depth).
+Scans multiple (task_dir, data_dir) pairs. Each data_dir uses its own
+0-based task_ids (matching gen_dataset.sh output). The manifest stores
+the actual state file path so the loader doesn't need to reconstruct it.
 """
 
 import json
 import glob
 import os
-import struct
 import random
-import sys
 from collections import defaultdict
 
 RECORD_SIZE = 576
 
+
 def get_optimal_depth(states_path):
-    """Read first record from states file, return optimal_depth = depth + budget_left."""
-    fsize = os.path.getsize(states_path)
-    if fsize < RECORD_SIZE:
+    """Read first record, return optimal_depth = depth + budget_left."""
+    if os.path.getsize(states_path) < RECORD_SIZE:
         return None
     with open(states_path, 'rb') as f:
         rec = f.read(RECORD_SIZE)
-    # Header: <QQIHBBBBbBB = state_hash(8), oep_hash(8), task_id(4),
-    #          parent_action(2), depth(1), budget_left(1), live(1),
-    #          can_finish(1), remaining(1), pad(2)
-    # depth at offset 22, budget_left at offset 23
-    depth = rec[22]
-    budget_left = rec[23]
-    return depth + budget_left
+    return rec[22] + rec[23]
 
 
 def count_records(states_path):
-    """Count state records in a file."""
     return os.path.getsize(states_path) // RECORD_SIZE
 
 
 def stratified_split(items, key_fn, train=0.70, val=0.15, test=0.15, seed=42):
-    """Split items into train/val/test stratified by key_fn."""
     rng = random.Random(seed)
-
-    # Group by stratum
     strata = defaultdict(list)
     for item in items:
         strata[key_fn(item)].append(item)
 
     splits = {'train': [], 'val': [], 'test': []}
-
     for key in sorted(strata.keys()):
         group = strata[key]
         rng.shuffle(group)
         n = len(group)
-        n_val = max(1, round(n * val)) if n >= 3 else 0
-        n_test = max(1, round(n * test)) if n >= 3 else 0
-        n_train = n - n_val - n_test
-
-        # If group too small, put everything in train
         if n < 3:
             splits['train'].extend(group)
         else:
+            n_val = max(1, round(n * val))
+            n_test = max(1, round(n * test))
+            n_train = n - n_val - n_test
             splits['train'].extend(group[:n_train])
             splits['val'].extend(group[n_train:n_train + n_val])
             splits['test'].extend(group[n_train + n_val:])
-
     return splits
 
 
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    task_dir = os.path.join(base_dir, 'data', 'synthetic')
-    train_dir = os.path.join(base_dir, 'data', 'train')
     out_path = os.path.join(base_dir, 'data', 'manifest.json')
 
-    # Get sorted task list (same order as gen_dataset.sh)
-    task_files = sorted(glob.glob(os.path.join(task_dir, '*.json')))
-    print(f"Found {len(task_files)} task files")
+    # All (task_dir, data_dir) sources. Each data_dir has 0-based task IDs.
+    sources = [
+        ('data/synthetic', 'data/train'),
+        ('data/synthetic_deep', 'data/train_deep'),
+        ('data/synthetic_deep', 'data/train_boot'),
+    ]
 
     tasks = []
-    solved_tasks = []
+    seen_names = set()
+    global_id = 0
 
-    for task_id, task_path in enumerate(task_files):
-        with open(task_path) as f:
-            spec = json.load(f)
+    for task_rel, data_rel in sources:
+        task_dir = os.path.join(base_dir, task_rel)
+        data_dir = os.path.join(base_dir, data_rel)
+        if not os.path.isdir(task_dir):
+            continue
 
-        rel_path = os.path.relpath(task_path, base_dir)
-        num_inputs = len(spec['input_ports'])
-        num_tests = len(spec['tests'])
+        task_files = sorted(glob.glob(os.path.join(task_dir, '*.json')))
 
-        # Check for training data
-        states_path = os.path.join(train_dir, f'states_{task_id:06d}.bin')
-        if os.path.exists(states_path) and os.path.getsize(states_path) >= RECORD_SIZE:
-            optimal_depth = get_optimal_depth(states_path)
-            n_records = count_records(states_path)
-            solved = True
-        else:
+        for local_id, task_path in enumerate(task_files):
+            name = os.path.basename(task_path).replace('.json', '')
+
+            # Deduplicate: if this task was already added from another source,
+            # check if THIS source has a deeper/better solution
+            if name in seen_names:
+                # Find existing entry and check if new source has data
+                if not os.path.isdir(data_dir):
+                    continue
+                states_path = os.path.join(data_dir, f'states_{local_id:06d}.bin')
+                if not os.path.exists(states_path) or os.path.getsize(states_path) < RECORD_SIZE:
+                    continue
+                # This source has data for a duplicate task — update existing entry
+                # if the new data has more records (deeper exploration)
+                new_depth = get_optimal_depth(states_path)
+                new_records = count_records(states_path)
+                for t in tasks:
+                    if t['name'] == name:
+                        if new_records > t['n_records']:
+                            t['optimal_depth'] = new_depth
+                            t['n_records'] = new_records
+                            t['states_path'] = os.path.relpath(states_path, base_dir)
+                            t['solved'] = True
+                        break
+                continue
+
+            seen_names.add(name)
+
+            with open(task_path) as f:
+                spec = json.load(f)
+
+            # Check for state data in this source's data_dir
+            solved = False
             optimal_depth = None
             n_records = 0
-            solved = False
+            states_rel = None
 
-        entry = {
-            'task_id': task_id,
-            'name': spec['name'],
-            'path': rel_path,
-            'num_inputs': num_inputs,
-            'num_tests': num_tests,
-            'solved': solved,
-            'optimal_depth': optimal_depth,
-            'n_records': n_records,
-        }
-        tasks.append(entry)
+            if os.path.isdir(data_dir):
+                states_path = os.path.join(data_dir, f'states_{local_id:06d}.bin')
+                if os.path.exists(states_path) and os.path.getsize(states_path) >= RECORD_SIZE:
+                    optimal_depth = get_optimal_depth(states_path)
+                    n_records = count_records(states_path)
+                    solved = True
+                    states_rel = os.path.relpath(states_path, base_dir)
 
-        if solved:
-            solved_tasks.append(entry)
+            tasks.append({
+                'task_id': global_id,
+                'name': name,
+                'path': os.path.relpath(task_path, base_dir),
+                'num_inputs': len(spec['input_ports']),
+                'num_tests': len(spec['tests']),
+                'solved': solved,
+                'optimal_depth': optimal_depth,
+                'n_records': n_records,
+                'states_path': states_rel,
+            })
+            global_id += 1
 
-    print(f"  {len(solved_tasks)} solved, {len(tasks) - len(solved_tasks)} unsolved")
+    solved_tasks = [t for t in tasks if t['solved']]
+    print(f"Found {len(tasks)} unique tasks, {len(solved_tasks)} solved")
 
-    # Stratified split of solved tasks by (num_inputs, optimal_depth)
+    # Stratified split
     splits = stratified_split(
         solved_tasks,
         key_fn=lambda t: (t['num_inputs'], t['optimal_depth']),
-        train=0.70, val=0.15, test=0.15,
-        seed=42,
     )
-
-    # Assign splits
     split_map = {}
     for split_name, split_tasks in splits.items():
         for t in split_tasks:
             split_map[t['task_id']] = split_name
-
     for t in tasks:
         t['split'] = split_map.get(t['task_id'], 'unsolved')
 
-    # Summary stats
+    # Summary
     depth_dist = defaultdict(int)
     split_counts = defaultdict(int)
     split_records = defaultdict(int)
@@ -148,28 +162,19 @@ def main():
     for s in ['train', 'val', 'test', 'unsolved']:
         print(f"  {s:>8s}: {split_counts[s]:4d} tasks, "
               f"{split_records[s]:>10,d} records")
-
     print(f"\nOptimal depth distribution:")
     for d in sorted(depth_dist.keys()):
         print(f"  depth {d}: {depth_dist[d]} tasks")
 
-    # Write manifest
     manifest = {
-        'version': 1,
+        'version': 2,
         'total_tasks': len(tasks),
         'solved_tasks': len(solved_tasks),
-        'splits': {
-            'train': split_counts['train'],
-            'val': split_counts['val'],
-            'test': split_counts['test'],
-        },
+        'splits': {s: split_counts[s] for s in ['train', 'val', 'test']},
         'tasks': tasks,
     }
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w') as f:
         json.dump(manifest, f, indent=2)
-
     print(f"\nManifest written to {out_path}")
 
 

@@ -102,6 +102,11 @@ class PCALib:
             ctypes.POINTER(SearchCtx), ctypes.POINTER(SearchState)]
         self.lib.search_state_oep_hash64.restype = ctypes.c_uint64
 
+        # search_state_key_hash64(ctx, s) -> uint64
+        self.lib.search_state_key_hash64.argtypes = [
+            ctypes.POINTER(SearchCtx), ctypes.POINTER(SearchState)]
+        self.lib.search_state_key_hash64.restype = ctypes.c_uint64
+
         # search_state_leaf_outputs(ctx, s) -> uint8
         self.lib.search_state_leaf_outputs.argtypes = [
             ctypes.POINTER(SearchCtx), ctypes.POINTER(SearchState)]
