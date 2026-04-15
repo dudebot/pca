@@ -1,11 +1,19 @@
 /*
- * evaluate.cu — CUDA exhaustive solver for PCA-16
+ * evaluate_oep.cu — CUDA exhaustive solver with OEP for PCA-16
  *
- * Each GPU thread generates one candidate program from a flat index,
- * evaluates it against all test cases, and reports pass/fail.
+ * Same flat-index approach as evaluate.cu, with observational equivalence
+ * pruning (OEP) added inside the kernel. Each thread incrementally
+ * maintains per-test register state as it decodes instructions, hashing
+ * the combined state at each position. If another thread already produced
+ * the same state (same hash in a global table via atomicCAS), the thread
+ * bails — any suffix that works for one works for the other.
+ *
+ * OEP is only applied for the first OEP_MAX_POS kernel positions and
+ * only for straight-line (non-branch) prefixes. After a BR instruction,
+ * OEP is disabled for the remainder of the decode.
  *
  * Build:
- *   nvcc -O3 -arch=native -o gpu_enumerate gpu/evaluate.cu tasks/spec.c src/vm.c
+ *   nvcc -O3 -arch=native -o gpu_enumerate_oep gpu/evaluate_oep.cu tasks/spec.c src/vm.c
  */
 
 #include <cuda_runtime.h>
@@ -25,6 +33,13 @@
 #define MAX_PROG_LEN 16
 #define MAX_GPU_SOLUTIONS 1024
 #define THREADS_PER_BLOCK 256
+
+/* --- OEP configuration --- */
+#define OEP_MAX_POS     3                       /* OEP for kernel positions 0..2 */
+#define OEP_TABLE_BITS  23                      /* 8M entries per position */
+#define OEP_TABLE_SIZE  (1ULL << OEP_TABLE_BITS)
+#define OEP_TABLE_MASK  (OEP_TABLE_SIZE - 1)
+#define OEP_NUM_PROBES  8
 
 __constant__ uint16_t d_candidates[MAX_CANDIDATES_PER_POS];
 __constant__ int d_num_candidates;
@@ -62,6 +77,149 @@ __device__ __forceinline__
 int reg_is_live(uint8_t live, uint8_t reg)
 {
     return reg == 0 || (live & (uint8_t)(1u << reg));
+}
+
+/* --- OEP: execute one instruction on a register state (inline) --- */
+__device__ __forceinline__
+void oep_exec_one(uint16_t insn, uint16_t *r, uint8_t *flags)
+{
+    uint8_t op  = INSN_OP(insn);
+    uint8_t rd  = INSN_RD(insn);
+    uint8_t rs  = INSN_RS(insn);
+    uint8_t rt  = INSN_RT(insn);
+    uint8_t imm = INSN_IMM8(insn);
+    int8_t simm = INSN_SIMM8(insn);
+
+    switch (op) {
+    case OP_ADD: {
+        uint32_t full = (uint32_t)r[rs] + (uint32_t)r[rt];
+        uint16_t res = (uint16_t)full;
+        *flags = 0;
+        if (res == 0) *flags |= FLAG_Z;
+        if (res & 0x8000) *flags |= FLAG_N;
+        if (full > 0xFFFF) *flags |= FLAG_C;
+        if (~(r[rs] ^ r[rt]) & (r[rs] ^ res) & 0x8000) *flags |= FLAG_V;
+        r[rd] = res;
+        break;
+    }
+    case OP_SUB: {
+        uint16_t a = r[rs], b = r[rt], res = a - b;
+        *flags = 0;
+        if (res == 0) *flags |= FLAG_Z;
+        if (res & 0x8000) *flags |= FLAG_N;
+        if (a >= b) *flags |= FLAG_C;
+        if ((a ^ b) & (a ^ res) & 0x8000) *flags |= FLAG_V;
+        r[rd] = res;
+        break;
+    }
+    case OP_MUL: {
+        uint32_t prod = (uint32_t)r[rs] * (uint32_t)r[rt];
+        r[rd] = (uint16_t)prod;
+        *flags = 0;
+        if (r[rd] == 0) *flags |= FLAG_Z;
+        if (r[rd] & 0x8000) *flags |= FLAG_N;
+        if (prod > 0xFFFF) *flags |= FLAG_C;
+        break;
+    }
+    case OP_DIV:
+        if (r[rt] == 0) { *flags = 0xFF; return; } /* fault sentinel */
+        r[rd] = (uint16_t)((int16_t)r[rs] / (int16_t)r[rt]);
+        *flags = 0;
+        if (r[rd] == 0) *flags |= FLAG_Z;
+        if (r[rd] & 0x8000) *flags |= FLAG_N;
+        break;
+    case OP_MOD:
+        if (r[rt] == 0) { *flags = 0xFF; return; }
+        r[rd] = (uint16_t)((int16_t)r[rs] % (int16_t)r[rt]);
+        *flags = 0;
+        if (r[rd] == 0) *flags |= FLAG_Z;
+        if (r[rd] & 0x8000) *flags |= FLAG_N;
+        break;
+    case OP_AND:
+        r[rd] = r[rs] & r[rt];
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_OR:
+        r[rd] = r[rs] | r[rt];
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_XOR:
+        r[rd] = r[rs] ^ r[rt];
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_SHL:
+        r[rd] = r[rs] << (r[rt] & 0xF);
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_SHR:
+        r[rd] = r[rs] >> (r[rt] & 0xF);
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_ASR:
+        r[rd] = (uint16_t)((int16_t)r[rs] >> (r[rt] & 0xF));
+        *flags = (r[rd] == 0 ? FLAG_Z : 0) | (r[rd] & 0x8000 ? FLAG_N : 0);
+        break;
+    case OP_CMP: {
+        uint16_t a = r[rd], b = r[rs], res = a - b;
+        *flags = 0;
+        if (res == 0) *flags |= FLAG_Z;
+        if (res & 0x8000) *flags |= FLAG_N;
+        if (a >= b) *flags |= FLAG_C;
+        if ((a ^ b) & (a ^ res) & 0x8000) *flags |= FLAG_V;
+        break;
+    }
+    case OP_LDI:
+        r[rd] = imm;
+        *flags = 0; /* LDI doesn't set flags in cpu VM, keep consistent */
+        break;
+    case OP_ADDI: {
+        uint16_t ext = (uint16_t)(int16_t)simm;
+        uint32_t full = (uint32_t)r[rd] + (uint32_t)ext;
+        uint16_t res = (uint16_t)full;
+        *flags = 0;
+        if (res == 0) *flags |= FLAG_Z;
+        if (res & 0x8000) *flags |= FLAG_N;
+        if (full > 0xFFFF) *flags |= FLAG_C;
+        if (~(r[rd] ^ ext) & (r[rd] ^ res) & 0x8000) *flags |= FLAG_V;
+        r[rd] = res;
+        break;
+    }
+    default:
+        break;
+    }
+    r[0] = 0;
+}
+
+/* --- OEP: FNV-1a 64-bit hash of all test register states + flags --- */
+__device__ __forceinline__
+uint64_t oep_hash_states(uint16_t oep_regs[][PCA_NUM_REGS],
+                         uint8_t *oep_flags, int num_tests)
+{
+    uint64_t h = 14695981039346656037ULL; /* FNV-1a offset basis */
+    for (int t = 0; t < num_tests; t++) {
+        for (int r = 0; r < PCA_NUM_REGS; r++) {
+            h ^= oep_regs[t][r] & 0xFF;  h *= 1099511628211ULL;
+            h ^= oep_regs[t][r] >> 8;    h *= 1099511628211ULL;
+        }
+        h ^= oep_flags[t]; h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+/* --- OEP: atomic insert-if-absent with linear probing --- */
+__device__ __forceinline__
+int oep_check_insert(unsigned long long *table, uint64_t hash)
+{
+    unsigned long long key = (unsigned long long)(hash | 1ULL);
+    unsigned long long slot = ((unsigned long long)(hash >> 1)) & OEP_TABLE_MASK;
+
+    for (int probe = 0; probe < OEP_NUM_PROBES; probe++) {
+        unsigned long long idx = (slot + probe) & OEP_TABLE_MASK;
+        unsigned long long old = atomicCAS(&table[idx], 0ULL, key);
+        if (old == 0ULL) return 0; /* new state, inserted */
+        if (old == key) return 1;  /* already seen, prune */
+    }
+    return 0; /* table full at this slot, don't prune (conservative) */
 }
 
 __device__ __forceinline__
@@ -244,7 +402,10 @@ void evaluate_kernel(
     uint16_t *d_solutions,
     int *d_solution_lens,
     int *d_num_solutions,
-    int max_solutions)
+    int max_solutions,
+    unsigned long long *oep_table_0,
+    unsigned long long *oep_table_1,
+    unsigned long long *oep_table_2)
 {
     uint64_t local_gid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (local_gid >= launch_candidates) return;
@@ -252,6 +413,7 @@ void evaluate_kernel(
     uint64_t gid = base_gid + local_gid;
     int nc = d_num_candidates;
     int scaffold_len = d_scaffold_len;
+    int num_tests = d_num_tests;
 
     int out_reg = (int)(gid % (PCA_NUM_REGS - 1)) + 1;
     uint64_t idx = gid / (PCA_NUM_REGS - 1);
@@ -260,6 +422,25 @@ void evaluate_kernel(
     int plen = 0;
     uint8_t live = d_initial_live;
     int skip_live = 0;
+    int skip_oep = 0;
+
+    /* OEP: per-test register state, maintained incrementally */
+    uint16_t oep_regs[MAX_TESTS][PCA_NUM_REGS];
+    uint8_t  oep_flags[MAX_TESTS];
+
+    /* Initialize OEP state from scaffold (IN instructions) */
+    for (int t = 0; t < num_tests; t++) {
+        for (int r = 0; r < PCA_NUM_REGS; r++) oep_regs[t][r] = 0;
+        for (int i = 0; i < scaffold_len; i++)
+            oep_regs[t][i + 1] = d_test_in[t][i];
+        oep_flags[t] = 0;
+    }
+
+    /* OEP table pointers indexed by position */
+    unsigned long long *oep_tables[OEP_MAX_POS];
+    oep_tables[0] = oep_table_0;
+    oep_tables[1] = oep_table_1;
+    oep_tables[2] = oep_table_2;
 
 #pragma unroll
     for (int i = 0; i < PCA_NUM_REGS; i++) {
@@ -276,13 +457,10 @@ void evaluate_kernel(
         uint8_t rt = INSN_RT(insn);
 
         if (op == OP_BR) {
-            /* Validate: forward-only, must land within kernel */
             int8_t off = INSN_SIMM8(insn);
             if (off < 1 || off > kernel_depth - k - 1) return;
-            /* After a branch, linear liveness is unsound — instructions
-             * after this point might be dead code (skipped by branch).
-             * Stop checking source liveness to avoid pruning valid programs. */
             skip_live = 1;
+            skip_oep = 1;
         } else if (!skip_live) {
             switch (op) {
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
@@ -304,22 +482,31 @@ void evaluate_kernel(
                 return;
             }
         } else {
-            /* After a branch: still track writes (conservative) but
-             * don't prune on source reads — instruction might be dead code */
             if (op >= OP_ADD && op <= OP_ASR) {
                 if (rd != 0) live |= (uint8_t)(1u << rd);
             } else if (op == OP_LDI) {
                 if (rd != 0) live |= (uint8_t)(1u << rd);
             } else if (op != OP_CMP && op != OP_ADDI) {
-                return;  /* unexpected opcode */
+                return;
             }
+        }
+
+        /* OEP: execute instruction on all test states and check hash */
+        if (!skip_oep && k < OEP_MAX_POS && oep_tables[k] != NULL) {
+            int faulted = 0;
+            for (int t = 0; t < num_tests; t++) {
+                oep_exec_one(insn, oep_regs[t], &oep_flags[t]);
+                if (oep_flags[t] == 0xFF) { faulted = 1; break; }
+            }
+            if (faulted) return; /* prefix causes fault on some test → can't solve */
+
+            uint64_t h = oep_hash_states(oep_regs, oep_flags, num_tests);
+            if (oep_check_insert(oep_tables[k], h)) return; /* pruned */
         }
 
         prog[plen++] = insn;
     }
 
-    /* Skip output liveness check if branches present — register
-     * might be written on a path we can't track linearly */
     if (!skip_live && !reg_is_live(live, (uint8_t)out_reg)) return;
     prog[plen++] = ENCODE_I(OP_OUT, out_reg, output_port);
     prog[plen++] = ENCODE_R(OP_HLT, 0, 0, 0);
@@ -559,6 +746,16 @@ int main(int argc, char **argv)
     CUDA_CHECK(cudaMalloc((void **)&d_num_solutions, sizeof(int)));
     CUDA_CHECK(cudaMemset(d_num_solutions, 0, sizeof(int)));
 
+    /* OEP tables: one per prefix position, 8M entries × 8 bytes = 64MB each */
+    unsigned long long *d_oep_tables[OEP_MAX_POS] = {NULL};
+    size_t oep_table_bytes = OEP_TABLE_SIZE * sizeof(unsigned long long);
+    for (int p = 0; p < OEP_MAX_POS; p++) {
+        CUDA_CHECK(cudaMalloc((void **)&d_oep_tables[p], oep_table_bytes));
+    }
+    printf("OEP: %d tables × %zu MB = %zu MB\n",
+           OEP_MAX_POS, oep_table_bytes / (1024 * 1024),
+           (size_t)OEP_MAX_POS * oep_table_bytes / (1024 * 1024));
+
     int device = 0;
     cudaDeviceProp props;
     CUDA_CHECK(cudaGetDevice(&device));
@@ -613,6 +810,10 @@ int main(int argc, char **argv)
 
         CUDA_CHECK(cudaMemset(d_num_solutions, 0, sizeof(int)));
 
+        /* Clear OEP tables for this depth */
+        for (int p = 0; p < OEP_MAX_POS && p < depth; p++)
+            CUDA_CHECK(cudaMemset(d_oep_tables[p], 0, oep_table_bytes));
+
         struct timespec depth_start;
         struct timespec depth_end;
         clock_gettime(CLOCK_MONOTONIC, &depth_start);
@@ -632,7 +833,10 @@ int main(int argc, char **argv)
                 d_solutions,
                 d_solution_lens,
                 d_num_solutions,
-                max_solutions);
+                max_solutions,
+                d_oep_tables[0],
+                d_oep_tables[1],
+                d_oep_tables[2]);
             CUDA_CHECK(cudaGetLastError());
             CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -733,6 +937,8 @@ int main(int argc, char **argv)
     CUDA_CHECK(cudaFree(d_solutions));
     CUDA_CHECK(cudaFree(d_solution_lens));
     CUDA_CHECK(cudaFree(d_num_solutions));
+    for (int p = 0; p < OEP_MAX_POS; p++)
+        CUDA_CHECK(cudaFree(d_oep_tables[p]));
 
     return (found_depth >= 0) ? 0 : 1;
 }

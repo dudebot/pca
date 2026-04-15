@@ -30,8 +30,8 @@
 
 /* --- observational equivalence pruning (OEP) ---
  *
- * After executing the partial program on the first test input,
- * hash the register file + flags. If the same state was reached
+ * After executing the partial program on ALL test inputs,
+ * hash the combined register file + flags. If the same state was reached
  * by a different instruction sequence at the same depth, the
  * remaining instructions will produce the same output — prune.
  *

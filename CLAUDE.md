@@ -34,12 +34,19 @@ pid.asm        Reference 6502 PID controller (historical comparison)
 
 ## Current state
 
-CPU solver verified optimal programs for 9 tasks (4-8 instructions each).
-CUDA solver written but not yet tested (no GPU on dev laptop).
+CPU solver verified optimal programs for 9 tasks:
+negate(4), double(4), square(4), add(5), abs(6), relu(6), max(7),
+saturating_add(8), is_power2(8).
+CUDA solver compiles and runs. Tested on RTX 2060: ~1.4B candidates/sec.
 
-The immediate next step is building and benchmarking the CUDA solver on a
-machine with an RTX 5070. Target: 500M candidates/sec (700x over CPU).
-After that: Python bindings, value network training, A* search.
+Known parity gaps between CPU and GPU solvers:
+- GPU lacks iterative deepening (fixed depth only, may find non-optimal)
+- GPU lacks liveness pruning and OEP (explores more dead-end candidates)
+- GPU lacks branch instruction generation (can't solve tasks needing conditionals)
+- GPU output is raw hex (no disassembly)
+
+Next steps: fix GPU/CPU parity, benchmark on RTX 5070, persist solutions
+to file (see issue #1), then Python bindings and value network training.
 
 ## ISA quick reference
 

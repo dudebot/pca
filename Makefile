@@ -29,11 +29,23 @@ tasks/%.o: tasks/%.c tasks/spec.h src/pca.h
 tools/%.o: tools/%.c src/pca.h tasks/spec.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# --- GPU solver (requires CUDA toolkit) ---
+NVCC    = nvcc
+NVFLAGS = -O3 -arch=native
+
+gpu_enumerate: gpu/evaluate.cu tasks/spec.c src/vm.c
+	$(NVCC) $(NVFLAGS) -o $@ $^
+
+gpu_enumerate_oep: gpu/evaluate_oep.cu tasks/spec.c src/vm.c
+	$(NVCC) $(NVFLAGS) -o $@ $^
+
 # --- targets ---
 all: pca enumerate
 
+gpu: gpu_enumerate gpu_enumerate_oep
+
 clean:
-	rm -f src/*.o tasks/*.o tools/*.o pca enumerate libpca.so
+	rm -f src/*.o tasks/*.o tools/*.o pca enumerate gpu_enumerate libpca.so
 
 test: pca
 	@echo "=== fibonacci ==="
