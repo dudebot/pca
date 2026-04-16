@@ -29,12 +29,14 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import glob
 import os
 import subprocess
 import sys
 import time
+from torch.utils.tensorboard import SummaryWriter
 
 
 def analyze_frontier(output_dir):
@@ -62,6 +64,80 @@ def count_total_records(output_dir):
     for f in glob.glob(os.path.join(output_dir, 'states_*.bin')):
         total += os.path.getsize(f) // 576
     return total
+
+
+def read_manifest_depths(base_dir):
+    """Read depth distribution from manifest."""
+    manifest_path = os.path.join(base_dir, 'data', 'manifest.json')
+    if not os.path.exists(manifest_path):
+        return {}
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    depths = {}
+    for t in manifest['tasks']:
+        d = t.get('optimal_depth')
+        if d is not None:
+            depths[d] = depths.get(d, 0) + 1
+    return depths
+
+
+def load_splits(base_dir):
+    """Load data/splits.json, or None if it doesn't exist."""
+    path = os.path.join(base_dir, 'data', 'splits.json')
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
+def save_splits(base_dir, splits_data):
+    """Write data/splits.json."""
+    path = os.path.join(base_dir, 'data', 'splits.json')
+    with open(path, 'w') as f:
+        json.dump(splits_data, f, indent=2)
+
+
+def seed_splits(base_dir):
+    """Create initial splits from manifest — 85% training, 15% frontier.
+    Uses hash-based ordering for determinism regardless of file order."""
+    manifest_path = os.path.join(base_dir, 'data', 'manifest.json')
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    solved = [t for t in manifest['tasks'] if t['solved']]
+    # Sort by name hash — deterministic and order-independent
+    solved.sort(key=lambda t: hashlib.sha256(t['name'].encode()).hexdigest())
+    n_frontier = max(1, len(solved) // 7)  # ~15%
+    tasks = {}
+    for t in solved[:-n_frontier]:
+        tasks[t['name']] = 'training'
+    for t in solved[-n_frontier:]:
+        tasks[t['name']] = 'frontier'
+    return {'round': 0, 'tasks': tasks}
+
+
+def graduate_frontier(splits_data):
+    """Move all frontier tasks → training. Returns count graduated."""
+    n = 0
+    for name in list(splits_data['tasks']):
+        if splits_data['tasks'][name] == 'frontier':
+            splits_data['tasks'][name] = 'training'
+            n += 1
+    return n
+
+
+def tag_new_solutions(splits_data, task_dir, boot_dir):
+    """Tag newly solved bootstrap tasks as frontier. Returns count tagged."""
+    task_files = sorted(glob.glob(os.path.join(task_dir, '*.json')))
+    n = 0
+    for tf in task_files:
+        name = os.path.basename(tf).replace('.json', '')
+        if name in splits_data['tasks']:
+            continue
+        bin_path = os.path.join(boot_dir, f'states_{name}.bin')
+        if os.path.exists(bin_path) and os.path.getsize(bin_path) > 0:
+            splits_data['tasks'][name] = 'frontier'
+            n += 1
+    return n
 
 
 def run_cmd(cmd, desc):
@@ -97,6 +173,10 @@ def main():
                         help='Initial hidden dim')
     parser.add_argument('--max-hidden', type=int, default=1024,
                         help='Maximum hidden dim')
+    parser.add_argument('--checkpoint', default=None,
+                        help='Starting checkpoint (default: checkpoints/value_v2.pt)')
+    parser.add_argument('--run-name', default=None,
+                        help='TensorBoard run name (default: auto)')
     args = parser.parse_args()
 
     if args.base_dir is None:
@@ -110,18 +190,39 @@ def main():
     epochs = args.initial_epochs
     hidden_dim = args.initial_hidden
     trunk_dim = hidden_dim // 2
-    checkpoint = os.path.join(args.base_dir, 'checkpoints', 'value_v2.pt')
+    checkpoint = (args.checkpoint or
+                  os.path.join(args.base_dir, 'checkpoints', 'value_v2.pt'))
+    if not os.path.isabs(checkpoint):
+        checkpoint = os.path.join(args.base_dir, checkpoint)
     boot_dir = os.path.join(args.base_dir, 'data', 'train_boot')
     prev_solved = 0
 
+    # TensorBoard for round-level frontier metrics
+    run_name = args.run_name or f'bootstrap_h{hidden_dim}'
+    tb_dir = os.path.join(args.base_dir, 'runs', run_name)
+    writer = SummaryWriter(tb_dir)
+
     print(f"Bootstrap loop: {total_tasks} tasks, max {args.max_rounds} rounds")
     print(f"Starting: budget={budget}, epochs={epochs}, hidden={hidden_dim}")
+    print(f"TensorBoard: {tb_dir}")
+
+    # ── Ensure splits.json exists ──
+    splits_data = load_splits(args.base_dir)
+    if splits_data is None:
+        # Build manifest (old-style) so we can scan what's solved
+        run_cmd([sys.executable, 'python/build_manifest.py'],
+                "Build initial manifest")
+        splits_data = seed_splits(args.base_dir)
+        save_splits(args.base_dir, splits_data)
+        n_t = sum(1 for v in splits_data['tasks'].values() if v == 'training')
+        n_f = sum(1 for v in splits_data['tasks'].values() if v == 'frontier')
+        print(f"  Seeded splits.json: {n_t} training, {n_f} frontier")
 
     # ── Round 0: Train initial model from scratch ──
     if not os.path.exists(checkpoint):
-        run_cmd([
-            sys.executable, 'python/build_manifest.py',
-        ], "Round 0: Build manifest")
+        # Rebuild manifest with splits.json
+        run_cmd([sys.executable, 'python/build_manifest.py'],
+                "Round 0: Build manifest with splits")
 
         run_cmd([
             sys.executable, 'python/train.py',
@@ -165,6 +266,24 @@ def main():
         print(f"\n  Solved: {cur_solved}/{total_tasks} "
               f"(+{new_solved} this round, {cur_records:,} records)")
 
+        # ── Tag new solutions + conditionally graduate old frontier ──
+        old_frontier = {name for name, s in splits_data['tasks'].items()
+                        if s == 'frontier'}
+        n_tagged = tag_new_solutions(splits_data, task_dir, boot_dir)
+
+        if n_tagged > 0:
+            # New frontier exists — graduate old frontier to training
+            for name in old_frontier:
+                splits_data['tasks'][name] = 'training'
+            print(f"  Graduated {len(old_frontier)} → training, "
+                  f"tagged {n_tagged} new frontier")
+        elif old_frontier:
+            print(f"  No new solutions, keeping {len(old_frontier)} "
+                  f"frontier as val")
+
+        splits_data['round'] = round_num
+        save_splits(args.base_dir, splits_data)
+
         if cur_solved >= total_tasks:
             print(f"\n  All {total_tasks} tasks solved!")
 
@@ -199,6 +318,7 @@ def main():
                 total_tasks = len(glob.glob(os.path.join(task_dir, '*.json')))
 
         # ── Decide strategy ──
+        dims_changed = False
         if new_solved == 0:
             # No progress — escalate
             if budget < args.max_budget:
@@ -210,6 +330,7 @@ def main():
             elif hidden_dim < args.max_hidden:
                 hidden_dim = min(hidden_dim * 2, args.max_hidden)
                 trunk_dim = hidden_dim // 2
+                dims_changed = True
                 print(f"  Epochs maxed → scaling model to hidden={hidden_dim}")
             else:
                 print(f"  All strategies exhausted. Stopping.")
@@ -222,11 +343,24 @@ def main():
             sys.executable, 'python/build_manifest.py',
         ], f"Round {round_num}: Rebuild manifest")
 
-        # ── Step 3: Retrain on combined data ──
+        # ── Log depth distribution to TensorBoard ──
+        all_depths = read_manifest_depths(args.base_dir)
+        total_solved_tasks = sum(all_depths.values())
+        if total_solved_tasks > 0:
+            for d, count in sorted(all_depths.items()):
+                writer.add_scalar(f'depth_fraction/depth_{d}',
+                                  count / total_solved_tasks, round_num)
+                writer.add_scalar(f'depth_count/depth_{d}', count, round_num)
+        writer.add_scalar('frontier/solved_total', cur_solved, round_num)
+        writer.add_scalar('frontier/solved_new', new_solved, round_num)
+        writer.add_scalar('frontier/records_total', cur_records, round_num)
+        writer.flush()
+
+        # ── Step 3: Retrain on combined data (warm-start from previous) ──
         new_ckpt = os.path.join(args.base_dir, 'checkpoints',
                                 f'value_round{round_num}.pt')
 
-        run_cmd([
+        train_cmd = [
             sys.executable, 'python/train.py',
             '--epochs', str(epochs),
             '--batch-size', '2048',
@@ -237,7 +371,11 @@ def main():
             '--trunk-dim', str(trunk_dim),
             '--save', os.path.relpath(new_ckpt, args.base_dir),
             '--run-name', f'round{round_num}_h{hidden_dim}_e{epochs}',
-        ], f"Round {round_num}: Retrain (epochs={epochs}, hidden={hidden_dim})")
+        ]
+        if os.path.exists(checkpoint) and not dims_changed:
+            train_cmd += ['--init-from', os.path.relpath(checkpoint, args.base_dir)]
+        run_cmd(train_cmd,
+                f"Round {round_num}: Retrain (epochs={epochs}, hidden={hidden_dim})")
 
         if os.path.exists(new_ckpt):
             checkpoint = new_ckpt
@@ -248,6 +386,7 @@ def main():
         prev_solved = cur_solved
 
     # ── Final report ──
+    writer.close()
     print(f"\n{'='*70}")
     print(f"Bootstrap complete after {round_num} rounds")
     print(f"Final: {cur_solved}/{total_tasks} tasks solved")

@@ -52,6 +52,17 @@ def stratified_split(items, key_fn, train=0.70, val=0.15, test=0.15, seed=42):
     return splits
 
 
+def find_states_file(data_dir, local_id, name):
+    """Find state file by index (exhaustive solver) or name (bootstrap)."""
+    path = os.path.join(data_dir, f'states_{local_id:06d}.bin')
+    if os.path.exists(path) and os.path.getsize(path) >= RECORD_SIZE:
+        return path
+    path = os.path.join(data_dir, f'states_{name}.bin')
+    if os.path.exists(path) and os.path.getsize(path) >= RECORD_SIZE:
+        return path
+    return None
+
+
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out_path = os.path.join(base_dir, 'data', 'manifest.json')
@@ -84,8 +95,8 @@ def main():
                 # Find existing entry and check if new source has data
                 if not os.path.isdir(data_dir):
                     continue
-                states_path = os.path.join(data_dir, f'states_{local_id:06d}.bin')
-                if not os.path.exists(states_path) or os.path.getsize(states_path) < RECORD_SIZE:
+                states_path = find_states_file(data_dir, local_id, name)
+                if states_path is None:
                     continue
                 # This source has data for a duplicate task — update existing entry
                 # if the new data has more records (deeper exploration)
@@ -113,8 +124,8 @@ def main():
             states_rel = None
 
             if os.path.isdir(data_dir):
-                states_path = os.path.join(data_dir, f'states_{local_id:06d}.bin')
-                if os.path.exists(states_path) and os.path.getsize(states_path) >= RECORD_SIZE:
+                states_path = find_states_file(data_dir, local_id, name)
+                if states_path is not None:
                     optimal_depth = get_optimal_depth(states_path)
                     n_records = count_records(states_path)
                     solved = True
@@ -136,17 +147,38 @@ def main():
     solved_tasks = [t for t in tasks if t['solved']]
     print(f"Found {len(tasks)} unique tasks, {len(solved_tasks)} solved")
 
-    # Stratified split
-    splits = stratified_split(
-        solved_tasks,
-        key_fn=lambda t: (t['num_inputs'], t['optimal_depth']),
-    )
-    split_map = {}
-    for split_name, split_tasks in splits.items():
-        for t in split_tasks:
-            split_map[t['task_id']] = split_name
-    for t in tasks:
-        t['split'] = split_map.get(t['task_id'], 'unsolved')
+    # Split assignment: use splits.json if present, else legacy stratified split
+    splits_path = os.path.join(base_dir, 'data', 'splits.json')
+    if os.path.exists(splits_path):
+        with open(splits_path) as f:
+            splits_data = json.load(f)
+        split_assignments = splits_data.get('tasks', {})
+        n_from_file = 0
+        for t in tasks:
+            status = split_assignments.get(t['name'])
+            if status == 'training':
+                t['split'] = 'train'
+                n_from_file += 1
+            elif status == 'frontier':
+                t['split'] = 'val'
+                n_from_file += 1
+            elif t['solved']:
+                t['split'] = 'train'  # solved but not in splits.json
+            else:
+                t['split'] = 'unsolved'
+        print(f"Using splits.json (round {splits_data.get('round', '?')}, "
+              f"{n_from_file} assigned)")
+    else:
+        splits = stratified_split(
+            solved_tasks,
+            key_fn=lambda t: (t['num_inputs'], t['optimal_depth']),
+        )
+        split_map = {}
+        for split_name, split_tasks in splits.items():
+            for t in split_tasks:
+                split_map[t['task_id']] = split_name
+        for t in tasks:
+            t['split'] = split_map.get(t['task_id'], 'unsolved')
 
     # Summary
     depth_dist = defaultdict(int)

@@ -375,9 +375,14 @@ def main():
 
     # Load model
     ckpt_path = os.path.join(args.base_dir, args.checkpoint)
-    model = ValueNetwork(max_depth=args.max_depth,
-                         num_tests=args.num_tests).to(device)
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt_args = ckpt.get('args', {})
+    model = ValueNetwork(
+        max_depth=args.max_depth,
+        num_tests=args.num_tests,
+        hidden_dim=ckpt_args.get('hidden_dim', 256),
+        trunk_dim=ckpt_args.get('trunk_dim', 128),
+    ).to(device)
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
     params = sum(p.numel() for p in model.parameters())

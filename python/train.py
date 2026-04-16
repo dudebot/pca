@@ -160,6 +160,8 @@ def main():
                         help='DataLoader num_workers for parallel data loading')
     parser.add_argument('--run-name', default=None,
                         help='TensorBoard run name (default: auto from optimizer+lr)')
+    parser.add_argument('--init-from', default=None,
+                        help='Checkpoint to warm-start model weights from')
     args = parser.parse_args()
 
     if args.base_dir is None:
@@ -188,6 +190,10 @@ def main():
         print("No training data. Run gen_dataset.sh and build_manifest.py first.")
         return
 
+    has_val = len(val_set) > 0
+    if not has_val:
+        print("No validation data — will save best training F1 checkpoint")
+
     pin = device.type == 'cuda'
     train_loader = DataLoader(train_set, batch_size=args.batch_size,
                               shuffle=True, num_workers=args.workers,
@@ -196,7 +202,7 @@ def main():
     val_loader = DataLoader(val_set, batch_size=args.batch_size,
                             shuffle=False, num_workers=args.workers,
                             pin_memory=pin,
-                            persistent_workers=args.workers > 0)
+                            persistent_workers=args.workers > 0) if has_val else None
 
     # Auto-compute pos_weight if not specified
     if args.pos_weight is None:
@@ -208,6 +214,12 @@ def main():
                          num_tests=args.num_tests,
                          hidden_dim=args.hidden_dim,
                          trunk_dim=args.trunk_dim).to(device)
+    if args.init_from:
+        init_ckpt = torch.load(args.init_from, map_location=device, weights_only=False)
+        model.load_state_dict(init_ckpt['model_state_dict'])
+        print(f"Warm-started from {args.init_from}")
+        del init_ckpt
+
     params = sum(p.numel() for p in model.parameters())
     print(f"Model: {params:,} parameters")
 
@@ -216,61 +228,77 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
 
     # Training loop
-    best_val_f1 = 0
+    best_f1 = 0
     os.makedirs(os.path.dirname(args.save) or '.', exist_ok=True)
 
     print(f"\nTraining for {args.epochs} epochs...")
-    print(f"{'Ep':>3s}  {'Loss':>7s}  {'tP':>5s}  {'tR':>5s}  {'tF1':>5s}  "
-          f"{'vLoss':>7s}  {'vP':>5s}  {'vR':>5s}  {'vF1':>5s}  {'Time':>5s}")
+    if has_val:
+        print(f"{'Ep':>3s}  {'Loss':>7s}  {'tP':>5s}  {'tR':>5s}  {'tF1':>5s}  "
+              f"{'vLoss':>7s}  {'vP':>5s}  {'vR':>5s}  {'vF1':>5s}  {'Time':>5s}")
+    else:
+        print(f"{'Ep':>3s}  {'Loss':>7s}  {'tP':>5s}  {'tR':>5s}  {'tF1':>5s}  {'Time':>5s}")
     print("-" * 72)
 
     for epoch in range(args.epochs):
         t0 = time.time()
         train_m = train_epoch(model, train_loader, optimizer, device,
                               args.max_depth, pos_weight=args.pos_weight)
-        val_m = eval_epoch(model, val_loader, device, args.max_depth)
+
+        if has_val:
+            val_m = eval_epoch(model, val_loader, device, args.max_depth)
+        else:
+            val_m = None
+
         scheduler.step()
         dt = time.time() - t0
 
         # Console output
-        print(f"{epoch+1:3d}  {train_m['loss']:7.4f}  "
-              f"{train_m['precision']:5.3f}  {train_m['recall']:5.3f}  "
-              f"{train_m['f1']:5.3f}  "
-              f"{val_m['loss']:7.4f}  {val_m['precision']:5.3f}  "
-              f"{val_m['recall']:5.3f}  {val_m['f1']:5.3f}  "
-              f"{dt:5.1f}s")
+        if val_m:
+            print(f"{epoch+1:3d}  {train_m['loss']:7.4f}  "
+                  f"{train_m['precision']:5.3f}  {train_m['recall']:5.3f}  "
+                  f"{train_m['f1']:5.3f}  "
+                  f"{val_m['loss']:7.4f}  {val_m['precision']:5.3f}  "
+                  f"{val_m['recall']:5.3f}  {val_m['f1']:5.3f}  "
+                  f"{dt:5.1f}s")
+        else:
+            print(f"{epoch+1:3d}  {train_m['loss']:7.4f}  "
+                  f"{train_m['precision']:5.3f}  {train_m['recall']:5.3f}  "
+                  f"{train_m['f1']:5.3f}  "
+                  f"{dt:5.1f}s")
 
         # TensorBoard logging
-        writer.add_scalars('loss', {
-            'train': train_m['loss'],
-            'val': val_m['loss'],
-        }, epoch + 1)
-        writer.add_scalars('f1', {
-            'train': train_m['f1'],
-            'val': val_m['f1'],
-        }, epoch + 1)
-        writer.add_scalars('precision', {
-            'train': train_m['precision'],
-            'val': val_m['precision'],
-        }, epoch + 1)
-        writer.add_scalars('recall', {
-            'train': train_m['recall'],
-            'val': val_m['recall'],
-        }, epoch + 1)
+        tb_loss = {'train': train_m['loss']}
+        tb_f1 = {'train': train_m['f1']}
+        tb_prec = {'train': train_m['precision']}
+        tb_rec = {'train': train_m['recall']}
+        if val_m:
+            tb_loss['val'] = val_m['loss']
+            tb_f1['val'] = val_m['f1']
+            tb_prec['val'] = val_m['precision']
+            tb_rec['val'] = val_m['recall']
+        writer.add_scalars('loss', tb_loss, epoch + 1)
+        writer.add_scalars('f1', tb_f1, epoch + 1)
+        writer.add_scalars('precision', tb_prec, epoch + 1)
+        writer.add_scalars('recall', tb_rec, epoch + 1)
         writer.add_scalar('lr', scheduler.get_last_lr()[0], epoch + 1)
 
-        if val_m['f1'] > best_val_f1:
-            best_val_f1 = val_m['f1']
+        # Save best checkpoint (val F1 if available, else train F1)
+        check_f1 = val_m['f1'] if val_m else train_m['f1']
+        if check_f1 > best_f1:
+            best_f1 = check_f1
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'val_metrics': val_m,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_metrics': val_m or train_m,
                 'args': vars(args),
             }, args.save)
-            print(f"  -> saved (best val F1={best_val_f1:.3f})")
+            label = 'val' if val_m else 'train'
+            print(f"  -> saved (best {label} F1={best_f1:.3f})")
 
     writer.close()
-    print(f"\nBest val F1: {best_val_f1:.3f}")
+    label = 'val' if has_val else 'train'
+    print(f"\nBest {label} F1: {best_f1:.3f}")
     print(f"Model saved to {args.save}")
 
 

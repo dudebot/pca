@@ -207,6 +207,12 @@ def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
         task_id = task_id_offset + i
         name = os.path.basename(task_path).replace('.json', '')
 
+        # Skip already-solved tasks
+        existing = os.path.join(output_dir, f'states_{name}.bin')
+        if os.path.exists(existing) and os.path.getsize(existing) > 0:
+            solved += 1
+            continue
+
         spec = lib.load_task(task_path)
         ctx = lib.init_ctx(spec)
         root = lib.init_root(ctx)
@@ -225,7 +231,7 @@ def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
         dt = time.time() - t0
 
         if ok:
-            states_path = os.path.join(output_dir, f'states_{task_id:06d}.bin')
+            states_path = os.path.join(output_dir, f'states_{name}.bin')
             n = write_records(records, task_id, sol_depth, ctx, lib, states_path)
             total_records += n
             solved += 1
@@ -280,9 +286,14 @@ def main():
 
     # Load model
     ckpt_path = os.path.join(args.base_dir, args.checkpoint)
-    model = ValueNetwork(max_depth=args.max_depth,
-                         num_tests=args.num_tests).to(device)
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt_args = ckpt.get('args', {})
+    model = ValueNetwork(
+        max_depth=args.max_depth,
+        num_tests=args.num_tests,
+        hidden_dim=ckpt_args.get('hidden_dim', 256),
+        trunk_dim=ckpt_args.get('trunk_dim', 128),
+    ).to(device)
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
     params = sum(p.numel() for p in model.parameters())
