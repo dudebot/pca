@@ -85,7 +85,15 @@ Nine hand-crafted tasks solved with provably optimal programs:
 
 **Pruning** makes this feasible. Raw branching factor per instruction is ~32K. Register liveness analysis, commutativity canonicalization, observational equivalence pruning (OEP), and dead instruction elimination reduce the effective branching factor to ~500-1000 per position. At depth 8 that's still ~4×10²¹ raw candidates, but the pruned tree is orders of magnitude smaller.
 
-**Hybrid CPU-GPU solver.** The CPU explores the search tree with smart pruning (iterative deepening, liveness tracking, branch generation), emitting batches of partial programs. The GPU brute-forces all suffix completions in parallel. On an RTX 5070 Ti, this yields 85-520× speedup over CPU-only, depending on the task.
+### Hybrid CPU-GPU solver
+
+The CPU runs iterative-deepening DFS with the full pruning stack — OEP hashing, register liveness, commutativity canonicalization, branch validation. At a configured split depth it stops recursing and emits a *prefix*: the partial program plus the minimal state the GPU needs to validate suffixes on its own (live registers, OEP hash, flag state). Prefixes accumulate in a host-side struct buffer and flush to the device in a single `cudaMemcpy` when the buffer fills. The kernel then turns the batch into a 2D work grid — each thread maps to a (prefix, suffix_permutation) pair and brute-forces every completion.
+
+The interesting move is the *asymmetry*. CPUs are good at branchy control flow (pruning, liveness tracking); GPUs are good at dumb parallel enumeration. The design question isn't "use both" but "what's the smallest amount of state I have to hand across the boundary so the GPU side can be correct without redoing the CPU's pruning?" Once that handoff is right, the pipeline shape — batch → flush → launch, sized around batch granularity rather than per-item — generalizes to any bandwidth-bounded transfer, GPU or otherwise.
+
+Read order for the CUDA-curious: `gpu/hybrid.cu` lines 1-13 (overview), 54-60 (`prefix_t` struct), 470-541 (emit / buffer / flush), 677-680 (allocation), 769-774 (flush site).
+
+On an RTX 5070 Ti this yields 85-520× speedup over CPU-only, depending on the task.
 
 ### Synthetic task generation
 
