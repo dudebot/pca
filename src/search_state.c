@@ -6,6 +6,7 @@
  */
 
 #include "search_state.h"
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -326,6 +327,134 @@ int search_gen_candidates_branchless(uint16_t *out, int max,
     }
 
     return n;
+}
+
+/* --- exhaustive leaf completion (issue #7) ---
+ *
+ * IDDFS over remaining instructions from an arbitrary search state,
+ * modeled on enumerate_kernel_ss() in tools/enumerate.c. OEP dedup
+ * tables are static (reused across calls) and cleared per call.
+ */
+
+#define EXH_OEP_BITS 20
+#define EXH_OEP_SIZE (1u << EXH_OEP_BITS)
+#define EXH_OEP_MASK (EXH_OEP_SIZE - 1)
+#define EXH_MAX_CANDIDATES 4096
+
+static uint32_t *exh_tables[SEARCH_MAX_DEPTH];  /* per relative depth, lazy alloc */
+static int       exh_dirty[SEARCH_MAX_DEPTH];
+static uint64_t  exh_states_explored;
+
+/* Returns 1 if this state was already seen at this relative depth
+ * (should prune), 0 if new or on alloc failure (conservative). */
+static int exh_oep_check_insert(int rel_depth, uint32_t hash)
+{
+    if (!exh_tables[rel_depth]) {
+        exh_tables[rel_depth] = calloc(EXH_OEP_SIZE, sizeof(uint32_t));
+        if (!exh_tables[rel_depth]) return 0;
+    }
+    uint32_t key = hash | 1;
+    uint32_t idx = hash & EXH_OEP_MASK;
+    for (int probe = 0; probe < 32; probe++) {
+        uint32_t *slot = &exh_tables[rel_depth][(idx + probe) & EXH_OEP_MASK];
+        if (*slot == 0) {
+            *slot = key;
+            exh_dirty[rel_depth] = 1;
+            return 0;
+        }
+        if (*slot == key)
+            return 1;
+    }
+    return 0;  /* probe window full, conservative */
+}
+
+static void exh_clear_tables(void)
+{
+    for (int d = 0; d < SEARCH_MAX_DEPTH; d++) {
+        if (exh_tables[d] && exh_dirty[d]) {
+            memset(exh_tables[d], 0, EXH_OEP_SIZE * sizeof(uint32_t));
+            exh_dirty[d] = 0;
+        }
+    }
+}
+
+/* DFS to exactly `target` remaining instructions. `pos` is the number
+ * of instructions appended so far. Returns solution length (>0) on
+ * success with path[0..len-1] filled, 0 otherwise. */
+static int exh_dfs(const search_ctx_t *ctx, const search_state_t *s,
+                   int pos, int target, uint16_t *path)
+{
+    uint16_t cands[EXH_MAX_CANDIDATES];
+    int nc = search_gen_candidates_branchless(cands, EXH_MAX_CANDIDATES, s);
+
+    for (int i = 0; i < nc; i++) {
+        search_state_t child;
+        if (!search_state_step(ctx, s, cands[i], &child))
+            continue;
+        exh_states_explored++;
+
+        /* Leaf check at every depth (catches shorter completions). */
+        if (search_state_leaf_outputs(ctx, &child)) {
+            path[pos] = cands[i];
+            return pos + 1;
+        }
+
+        if (pos + 1 >= target)
+            continue;
+
+        /* OEP prune (indexed by parent pos, matching enumerate.c). */
+        uint64_t h64 = search_state_oep_hash64(ctx, &child);
+        if (exh_oep_check_insert(pos, (uint32_t)h64))
+            continue;
+
+        path[pos] = cands[i];
+        int len = exh_dfs(ctx, &child, pos + 1, target, path);
+        if (len > 0)
+            return len;
+    }
+    return 0;
+}
+
+int search_exhaustive_complete(
+    const search_ctx_t *ctx,
+    const search_state_t *start,
+    int max_depth,
+    uint16_t *solution_insns,
+    int *solution_len)
+{
+    exh_states_explored = 0;
+    *solution_len = 0;
+
+    /* Depth-0 completion: the state itself already solves the task. */
+    if (search_state_leaf_outputs(ctx, start))
+        return 1;
+
+    int max_r = max_depth - (int)start->depth;
+    if (max_r <= 0)
+        return 0;
+    if (max_r > SEARCH_MAX_DEPTH)
+        max_r = SEARCH_MAX_DEPTH;
+
+    uint16_t path[SEARCH_MAX_DEPTH];
+
+    /* IDDFS: shortest completion first. Tables cleared per iteration
+     * (a state pruned at target=k must be re-explorable at target=k+1
+     * where it has more remaining budget). */
+    for (int target = 1; target <= max_r; target++) {
+        exh_clear_tables();
+        int len = exh_dfs(ctx, start, 0, target, path);
+        if (len > 0) {
+            memcpy(solution_insns, path, (size_t)len * sizeof(uint16_t));
+            *solution_len = len;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+uint64_t search_exhaustive_states_explored(void)
+{
+    return exh_states_explored;
 }
 
 /* --- debug --- */

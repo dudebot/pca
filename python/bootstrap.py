@@ -36,14 +36,20 @@ from search_eval import (PCALib, SearchState, FeatureExtractor,
 # ── Recording search ────────────────────────────────────────────────────────
 
 def search_and_record(lib, ctx, root, max_depth, budget, task_id,
-                      model, feat_extractor, device, neg_stride=8):
+                      model, feat_extractor, device, neg_stride=8,
+                      r_exhaustive=0):
     """
     Model-guided best-first search that records all visited states.
+
+    When r_exhaustive > 0, nodes within r_exhaustive of max_depth are
+    handed to brute-force IDDFS leaf completion (issue #7) instead of
+    model-guided expansion.
 
     Returns:
         solved: bool
         solution_depth: int or None
         states: list of (SearchState, can_finish, remaining, parent_action)
+        stats: dict of exhaustive-completion instrumentation
     """
     # Track parent relationships for backtracing optimal path
     # Each entry: (state, parent_idx, action_taken)
@@ -51,22 +57,58 @@ def search_and_record(lib, ctx, root, max_depth, budget, task_id,
     heap = [(0.0, 0, 0)]  # (priority, counter, node_idx)
     counter = 1
     expansions = 0
-    visited_oep = set()
+    # Depth-dominance-aware OEP dedup: oep_hash -> shallowest depth expanded.
+    # Only skip if a same-or-shallower visit exists (a shallower state has
+    # more remaining budget and must not be blocked by a deeper failure).
+    visited_oep = {}
     solution_node = None
+    stats = {'exhaustive_calls': 0, 'exhaustive_states_explored': 0,
+             'exhaustive_time_ms': 0.0, 'exhaustive_solved': 0}
 
     while heap and expansions < budget:
         _, _, node_idx = heapq.heappop(heap)
         state, _, _ = nodes[node_idx]
 
         oep = lib.oep_hash(ctx, state)
-        if oep in visited_oep:
+        seen_depth = visited_oep.get(oep)
+        if seen_depth is not None and seen_depth <= state.depth:
             continue
-        visited_oep.add(oep)
+        visited_oep[oep] = state.depth
 
         expansions += 1
 
         if state.depth >= max_depth:
             continue
+
+        # Exhaustive leaf completion (issue #7): within R of max_depth,
+        # brute force finishes the job instead of model-guided expansion.
+        if r_exhaustive > 0 and state.depth >= max_depth - r_exhaustive:
+            t0 = time.time()
+            found, sol_len, sol_insns = lib.exhaustive_complete(
+                ctx, state, max_depth)
+            stats['exhaustive_calls'] += 1
+            stats['exhaustive_states_explored'] += \
+                lib.exhaustive_states_explored()
+            stats['exhaustive_time_ms'] += (time.time() - t0) * 1000.0
+            if found:
+                stats['exhaustive_solved'] = 1
+                # Replay verified suffix via lib.step() into nodes
+                cur = state
+                parent_idx = node_idx
+                for insn in sol_insns:
+                    child = lib.step(ctx, cur, insn)
+                    assert child is not None, \
+                        "exhaustive completion replay step failed"
+                    idx = len(nodes)
+                    nodes.append((child, parent_idx, insn))
+                    parent_idx = idx
+                    cur = child
+                solution_node = parent_idx
+                break
+            else:
+                # Heuristic (not proven) dead end: OEP hash ignores
+                # liveness. Already counted against budget above.
+                continue
 
         candidates = lib.gen_candidates(state)
 
@@ -111,7 +153,7 @@ def search_and_record(lib, ctx, root, max_depth, budget, task_id,
             counter += 1
 
     if solution_node is None:
-        return False, None, []
+        return False, None, [], stats
 
     # Backtrace optimal path
     optimal_set = set()
@@ -123,6 +165,9 @@ def search_and_record(lib, ctx, root, max_depth, budget, task_id,
         idx = parent_idx
 
     # Build labeled records
+    # NOTE (issue #7 v1): ancestors above an exhaustive-completion trigger
+    # state carry heuristic labels (first path found), same quality as
+    # current bootstrap labels; the exhaustive suffix itself is verified.
     records = []
     neg_count = 0
     for i, (state, parent_idx, action) in enumerate(nodes):
@@ -135,7 +180,7 @@ def search_and_record(lib, ctx, root, max_depth, budget, task_id,
             if neg_count % neg_stride == 0:
                 records.append((state, 0, -1, action))
 
-    return True, solution_depth, records
+    return True, solution_depth, records, stats
 
 
 def write_records(records, task_id, max_depth, ctx, lib, output_path):
@@ -194,7 +239,7 @@ def write_records(records, task_id, max_depth, ctx, lib, output_path):
 
 def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
                             output_dir, max_depth, budget, neg_stride,
-                            task_id_offset=0):
+                            task_id_offset=0, r_exhaustive=0):
     """Run model-guided search on a list of tasks, record solutions."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -202,6 +247,8 @@ def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
     failed = 0
     total_records = 0
     depth_dist = {}
+    exh_totals = {'exhaustive_calls': 0, 'exhaustive_states_explored': 0,
+                  'exhaustive_time_ms': 0.0, 'exhaustive_solved': 0}
 
     for i, task_path in enumerate(task_files):
         task_id = task_id_offset + i
@@ -225,10 +272,19 @@ def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
         feat_extractor = FeatureExtractor(task_io, num_tests=num_tests)
 
         t0 = time.time()
-        ok, sol_depth, records = search_and_record(
+        ok, sol_depth, records, stats = search_and_record(
             lib, ctx, root, max_depth, budget, task_id,
-            model, feat_extractor, device, neg_stride=neg_stride)
+            model, feat_extractor, device, neg_stride=neg_stride,
+            r_exhaustive=r_exhaustive)
         dt = time.time() - t0
+
+        for k in exh_totals:
+            exh_totals[k] += stats[k]
+
+        exh_str = ""
+        if stats['exhaustive_calls']:
+            exh_str = (f" exh:{stats['exhaustive_calls']}c/"
+                       f"{stats['exhaustive_time_ms']:.0f}ms")
 
         if ok:
             states_path = os.path.join(output_dir, f'states_{name}.bin')
@@ -236,19 +292,21 @@ def run_bootstrap_iteration(lib, task_files, model, device, num_tests,
             total_records += n
             solved += 1
             depth_dist[sol_depth] = depth_dist.get(sol_depth, 0) + 1
-            status = f"d*={sol_depth} {n:5d} records"
+            via = "exh" if stats['exhaustive_solved'] else "model"
+            status = f"d*={sol_depth} {n:5d} records ({via})"
         else:
             failed += 1
             status = "FAIL"
 
         print(f"  [{i+1:3d}/{len(task_files)}] {name[:35]:35s}  "
-              f"{status:25s}  [{dt:.1f}s]")
+              f"{status:25s}  [{dt:.1f}s]{exh_str}")
 
     return {
         'solved': solved,
         'failed': failed,
         'total_records': total_records,
         'depth_dist': depth_dist,
+        'exhaustive': exh_totals,
     }
 
 
@@ -270,6 +328,9 @@ def main():
     parser.add_argument('--num-tests', type=int, default=10)
     parser.add_argument('--neg-stride', type=int, default=8,
                         help='Record every Nth negative state')
+    parser.add_argument('--exhaustive-radius', type=int, default=3,
+                        help='Brute-force leaf completion within R of '
+                             'max_depth (0 = disabled)')
     parser.add_argument('--max-tasks', type=int, default=None)
     parser.add_argument('--task-id-offset', type=int, default=0,
                         help='Starting task_id for recorded states')
@@ -308,13 +369,15 @@ def main():
 
     output_dir = os.path.join(args.base_dir, args.output_dir)
     print(f"Output: {output_dir}")
-    print(f"Budget: {args.budget} expansions, max_depth={args.max_depth}")
+    print(f"Budget: {args.budget} expansions, max_depth={args.max_depth}, "
+          f"exhaustive_radius={args.exhaustive_radius}")
     print("-" * 70)
 
     result = run_bootstrap_iteration(
         lib, task_files, model, device, args.num_tests,
         output_dir, args.max_depth, args.budget, args.neg_stride,
-        task_id_offset=args.task_id_offset)
+        task_id_offset=args.task_id_offset,
+        r_exhaustive=args.exhaustive_radius)
 
     print(f"\n{'='*70}")
     print(f"Solved: {result['solved']}, Failed: {result['failed']}")
@@ -323,6 +386,12 @@ def main():
         print("Depth distribution:")
         for d in sorted(result['depth_dist']):
             print(f"  depth {d}: {result['depth_dist'][d]} tasks")
+    exh = result['exhaustive']
+    if exh['exhaustive_calls']:
+        print(f"Exhaustive completion: {exh['exhaustive_calls']:,} calls, "
+              f"{exh['exhaustive_states_explored']:,} states, "
+              f"{exh['exhaustive_time_ms']/1000.0:.1f}s total, "
+              f"{exh['exhaustive_solved']} tasks solved via completion")
 
 
 if __name__ == '__main__':

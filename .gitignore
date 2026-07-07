@@ -20,3 +20,5 @@ checkpoints/
 
 # TensorBoard logs
 runs/
+__pycache__/
+*.pyc

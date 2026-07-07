@@ -173,6 +173,9 @@ def main():
                         help='Initial hidden dim')
     parser.add_argument('--max-hidden', type=int, default=1024,
                         help='Maximum hidden dim')
+    parser.add_argument('--exhaustive-radius', type=int, default=3,
+                        help='Brute-force leaf completion within R of '
+                             'max_depth (0 = disabled)')
     parser.add_argument('--checkpoint', default=None,
                         help='Starting checkpoint (default: checkpoints/value_v2.pt)')
     parser.add_argument('--run-name', default=None,
@@ -257,7 +260,9 @@ def main():
             '--budget', str(budget),
             '--max-depth', '8',
             '--neg-stride', '8',
-        ], f"Round {round_num}: Model-guided search (budget={budget})")
+            '--exhaustive-radius', str(args.exhaustive_radius),
+        ], f"Round {round_num}: Model-guided search (budget={budget}, "
+           f"R={args.exhaustive_radius})")
 
         cur_solved = count_solved(boot_dir)
         cur_records = count_total_records(boot_dir)

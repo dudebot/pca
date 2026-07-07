@@ -139,3 +139,57 @@ If the reason we abandoned assembly was that humans can't manage the complexity 
 The VM state is a 266-element vector: 8 registers + 256 memory words + PC + SP. That's small enough for a neural network to digest as a direct observation. The action space is the instruction set. The reward is program correctness. The question is whether a system trained on this loop develops the kind of intuition for computational structure that lets it write assembly no human would consider — an AlphaGo for programs.
 
 A PID controller is the simplest version of the predictive coding loop: sense, predict, correct. Start here.
+
+## RUNBOOK: Phase-3 kill experiment (issue #7 leaf completion)
+
+One command decides whether Phase 3 lives. The kill rule is pre-registered
+in the header of `run_kill_experiment.sh` (KILL if zero depth>=6 solves
+beyond what a 120s branchless brute force reaches; see `STATUS.md` for the
+full decision tree).
+
+```bash
+./run_kill_experiment.sh          # GPU box / rental
+CUDA_VISIBLE_DEVICES= ./run_kill_experiment.sh   # CPU-only box
+```
+
+The script is self-contained: builds C, runs unit tests, regenerates the
+training data (states-only, ~15-20GB with `neg_stride=8`; `edges_*.bin`
+deleted — nothing reads them), trains round-0 if no checkpoint exists,
+runs the R=0-vs-R=3 A/B control, runs `run_bootstrap.py` to convergence
+(escalation exhaustion or 10 rounds), then cross-checks every depth>=6
+solve against `timeout 120 ./enumerate <task> -d 8 --no-branch` and prints
+KEEP/KILL. Reports land in `kill_report/`, logs in `logs/`.
+
+### GPU rental instructions
+
+An H100 is overkill for the 280K-param value net — search is
+python/ctypes CPU-bound (~3.3ms/expansion). What matters is **8+ fast
+vCPUs**; the GPU only accelerates model scoring and training.
+
+| Option | Instance | Est. wall clock | Est. cost |
+|--------|----------|-----------------|-----------|
+| Recommended | 1x RTX 4090, 8-16 vCPU spot (Runpod/Vast/Lambda, ~$0.40-0.70/hr) | 3-6 h | ~$2-4 |
+| As specced | 1x H100 PCIe spot (~$2-3/hr) | 3-6 h | ~$6-18 |
+| No rental | idle 8-core CPU box | ~1-2 days | $0 |
+
+Wall-clock breakdown (idle-box measurements 2026-07-07, GPU estimates
+inferred): data regen ~30 min (CPU-parallel), round-0 train 10-20 min GPU
+/ 1.5-2.5 h CPU, A/B control ~1-2 h, loop rounds 30-60 min each.
+
+Launch on a fresh rental:
+
+```bash
+git clone https://<TOKEN>@github.com/dudebot/pca && cd pca
+git checkout kill-experiment-2026-07-07
+pip install torch numpy tensorboard   # do NOT pip install -r requirements.txt (torch pin churn)
+nohup ./run_kill_experiment.sh > kill.out 2>&1 &
+tail -f kill.out       # verdict prints at the end; artifacts in kill_report/
+```
+
+Copy back before terminating the instance: `kill_report/`, `logs/`,
+`checkpoints/value_round*.pt`, `data/splits.json`, `runs/`.
+
+Local-box caveats: prefix every python invocation with
+`CUDA_VISIBLE_DEVICES=` if another job owns the GPU (device selection is
+hardcoded cuda-if-available), and check disk — full regen needs ~15-20GB
+free after edge-file deletion.

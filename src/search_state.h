@@ -105,6 +105,27 @@ void search_state_serialize(const search_ctx_t *ctx,
 int search_gen_candidates_branchless(uint16_t *out, int max,
                                      const search_state_t *s);
 
+/* Exhaustive leaf completion: IDDFS from `start` over remaining
+ * instructions 0..(max_depth - start->depth), with OEP pruning
+ * (static tables, cleared per call). Checks leaf_outputs at every
+ * depth. On success returns 1 and writes the instruction sequence
+ * (shortest completion, up to OEP heuristics) to solution_insns
+ * (caller provides >= SEARCH_MAX_DEPTH slots) and its length to
+ * solution_len. Returns 0 if no completion exists within max_depth.
+ * NOTE: OEP hash ignores liveness — pruning is heuristic, not
+ * proof-grade (see issue #7 Codex review). */
+int search_exhaustive_complete(
+    const search_ctx_t *ctx,
+    const search_state_t *start,
+    int max_depth,
+    uint16_t *solution_insns,  /* out: instruction sequence */
+    int *solution_len          /* out: actual solution length found */
+);
+
+/* Instrumentation: states explored by the most recent
+ * search_exhaustive_complete() call. */
+uint64_t search_exhaustive_states_explored(void);
+
 /* Debug: print state to file. */
 void search_state_dump(const search_ctx_t *ctx,
                        const search_state_t *s, FILE *fp);

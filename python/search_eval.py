@@ -118,6 +118,17 @@ class PCALib:
             ctypes.POINTER(SearchState)]
         self.lib.search_gen_candidates_branchless.restype = ctypes.c_int
 
+        # search_exhaustive_complete(ctx, start, max_depth, insns, len) -> int
+        self.lib.search_exhaustive_complete.argtypes = [
+            ctypes.POINTER(SearchCtx), ctypes.POINTER(SearchState),
+            ctypes.c_int, ctypes.POINTER(ctypes.c_uint16),
+            ctypes.POINTER(ctypes.c_int)]
+        self.lib.search_exhaustive_complete.restype = ctypes.c_int
+
+        # search_exhaustive_states_explored() -> uint64
+        self.lib.search_exhaustive_states_explored.argtypes = []
+        self.lib.search_exhaustive_states_explored.restype = ctypes.c_uint64
+
     def load_task(self, path):
         spec = TaskSpec()
         rc = self.lib.task_load(path.encode(), ctypes.byref(spec))
@@ -156,6 +167,22 @@ class PCALib:
         n = self.lib.search_gen_candidates_branchless(buf, MAX_CANDIDATES,
                                                       ctypes.byref(state))
         return [buf[i] for i in range(n)]
+
+    def exhaustive_complete(self, ctx, state, max_depth):
+        """Brute-force IDDFS completion from state to max_depth.
+        Returns (found, sol_len, [insns])."""
+        insns = (ctypes.c_uint16 * 16)()
+        sol_len = ctypes.c_int(0)
+        found = self.lib.search_exhaustive_complete(
+            ctypes.byref(ctx), ctypes.byref(state), max_depth,
+            insns, ctypes.byref(sol_len))
+        if found:
+            return True, sol_len.value, [insns[i] for i in range(sol_len.value)]
+        return False, 0, []
+
+    def exhaustive_states_explored(self):
+        """States explored by the most recent exhaustive_complete call."""
+        return self.lib.search_exhaustive_states_explored()
 
 
 # ── Feature extraction ───────────────────────────────────────────────────────
