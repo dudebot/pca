@@ -43,11 +43,13 @@ python3 python/test_exhaustive.py
 
 echo "== [3/7] regenerate exhaustive training data (states-only) =="
 # edges_*.bin are 83% of bytes and read by zero python code — delete them.
+# PRUNE_EDGES=1 deletes per-task during generation so peak disk stays
+# states-only (~2GB) instead of ~19GB; the rm lines below are a backstop.
 if [ "$SKIP_DATA_REGEN" != 1 ]; then
-    ./tools/gen_dataset.sh data/synthetic data/train 6 "$NEG_STRIDE" 30 \
+    PRUNE_EDGES=1 ./tools/gen_dataset.sh data/synthetic data/train 6 "$NEG_STRIDE" 30 \
         2>&1 | tee logs/gen_train.log
     rm -f data/train/edges_*.bin
-    ./tools/gen_dataset.sh data/synthetic_deep data/train_deep 8 "$NEG_STRIDE" 120 \
+    PRUNE_EDGES=1 ./tools/gen_dataset.sh data/synthetic_deep data/train_deep 8 "$NEG_STRIDE" 120 \
         2>&1 | tee logs/gen_train_deep.log
     rm -f data/train_deep/edges_*.bin
 fi

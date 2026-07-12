@@ -33,6 +33,12 @@ for task in "${TASKS[@]}"; do
         FAILED=$((FAILED + 1))
     fi
 
+    # PRUNE_EDGES=1: delete each task's edges file immediately (edges are 83% of
+    # bytes, read by zero python code) so peak disk stays states-only.
+    if [ "${PRUNE_EDGES:-0}" = 1 ]; then
+        rm -f "$OUTPUT_DIR/edges_$(printf '%06d' "$TASK_ID").bin"
+    fi
+
     TASK_ID=$((TASK_ID + 1))
 
     # Progress

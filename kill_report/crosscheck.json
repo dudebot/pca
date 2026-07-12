@@ -1,0 +1,425 @@
+{
+  "brute_timeout_s": 120,
+  "depth6plus_solved_by_loop": 48,
+  "beyond_brute_force": 35,
+  "beyond_tasks": [
+    {
+      "task": "syn_1inp_len10_000040",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000042",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000067",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000117",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000133",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000240",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000274",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000289",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000301",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000361",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000390",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000402",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000432",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000437",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000469",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len5_000079",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len6_000014",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len6_000490",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000093",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000377",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000402",
+      "depth": 6,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000006",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000012",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000016",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000022",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000049",
+      "depth": 6,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000078",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000088",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000101",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000108",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000146",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len5_000457",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len6_000258",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len7_000063",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len8_000245",
+      "depth": 8,
+      "brute": "timeout"
+    }
+  ],
+  "all": [
+    {
+      "task": "syn_1inp_len10_000040",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000042",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000067",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000090",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000117",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000133",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000237",
+      "depth": 7,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000240",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000274",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000289",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000290",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000301",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000361",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000385",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000390",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000402",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000409",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000413",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000432",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000437",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000454",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len10_000469",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len10_000478",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len5_000079",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len6_000014",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len6_000204",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len6_000490",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000093",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000377",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len7_000402",
+      "depth": 6,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000006",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000012",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000016",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000022",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000025",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len8_000049",
+      "depth": 6,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000076",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_1inp_len8_000078",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000088",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000101",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000108",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_1inp_len8_000146",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len4_000320",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_2inp_len5_000457",
+      "depth": 7,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len6_000258",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len7_000063",
+      "depth": 8,
+      "brute": "timeout"
+    },
+    {
+      "task": "syn_2inp_len8_000186",
+      "depth": 8,
+      "brute": "solved"
+    },
+    {
+      "task": "syn_2inp_len8_000245",
+      "depth": 8,
+      "brute": "timeout"
+    }
+  ],
+  "note": "run truncated mid-round-3 of 10 (wall-clock); cross-check parallelized 6-way on idle box, per-task semantics identical to run_kill_experiment.sh step 7"
+}
